@@ -1,5 +1,7 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { compressImage } from '../lib/imageUtils'
+import { ContentEditableEditor } from '../lib/richText'
 import { AlertCircle, Camera, Clock, Loader2, Plus, Send, Tag, Trash2, X } from 'lucide-react'
 
 const FALLBACK_GENERAL_CATEGORIES = ['交接', '備忘', '待辦', '特殊項目']
@@ -21,9 +23,12 @@ export default function TaskModal({
   creatorName,
   defaultCategory = '待辦',
   onTaskAdded,
+  dynamicHandoffCategories = FALLBACK_GENERAL_CATEGORIES,
+  editTask = null,
 }) {
+  const isEditMode = Boolean(editTask)
   const [loading, setLoading] = useState(false)
-  const [categories, setCategories] = useState(FALLBACK_GENERAL_CATEGORIES)
+  const [categories, setCategories] = useState(dynamicHandoffCategories)
   const [formData, setFormData] = useState({
     content: '',
     category_name: defaultCategory,
@@ -43,7 +48,12 @@ export default function TaskModal({
   })
 
   async function fetchCategories() {
-    const fallback = formData.type === '檢體收送' ? FALLBACK_SPECIMEN_CATEGORIES : FALLBACK_GENERAL_CATEGORIES
+    if (formData.type === '工作交接') {
+      setCategories(dynamicHandoffCategories.length ? dynamicHandoffCategories : FALLBACK_GENERAL_CATEGORIES)
+      return
+    }
+
+    const fallback = FALLBACK_SPECIMEN_CATEGORIES
     const { data, error } = await supabase.from('categories').select('*').order('name')
     if (error || !data?.length) {
       setCategories(fallback)
@@ -51,7 +61,7 @@ export default function TaskModal({
     }
 
     const currentTypeCategories = data
-      .filter((category) => (category.type || '工作交接') === formData.type)
+      .filter((category) => category.type === '檢體收送')
       .map((category) => category.name)
 
     setCategories(currentTypeCategories.length ? currentTypeCategories : fallback)
@@ -60,53 +70,127 @@ export default function TaskModal({
   useEffect(() => {
     if (!isOpen) return
     fetchCategories()
-  }, [isOpen, formData.type])
+  }, [isOpen, formData.type, dynamicHandoffCategories])
+
+  // 編輯模式：預填表單
+  useEffect(() => {
+    if (!isOpen) return
+    if (editTask) {
+      const dl = editTask.deadline
+        ? new Date(editTask.deadline).toISOString().slice(0, 16)
+        : ''
+      setFormData({
+        content: editTask.content || '',
+        category_name: editTask.category_name || defaultCategory,
+        type: editTask.type || '工作交接',
+        priority: editTask.priority || false,
+        deadline: dl,
+        image_urls: Array.isArray(editTask.image_urls) ? editTask.image_urls : [],
+        checklist: Array.isArray(editTask.checklist) ? editTask.checklist : [],
+      })
+      // 如果有逐行勾選內容，自動切換到勾選模式
+      const lines = (editTask.content || '').split('\n')
+      // 只要有任何一行符合勾選格式（[ ] 或 [x]），就開啟勾選模式
+      const hasChecks = lines.some(l => /^-\s*\[[xX ]\]/.test(l))
+      if (hasChecks) {
+        setIsChecklistMode(true)
+        const nextLines = lines.filter(l => l.trim()).map(text => {
+          const isCheck = /^-\s*\[[xX ]\]\s*/.test(text)
+          // 移除 markdown 語法以及結尾的人名標記
+          const cleanText = text.replace(/^-\s*\[[xX ]\]\s*/, '').replace(/\s*\(@.*?\)\s*$/, '')
+          return { text: cleanText, checked: isCheck }
+        })
+        setContentLines(nextLines.length > 0 ? nextLines : [{ text: '', checked: false }])
+      } else {
+        setIsChecklistMode(false)
+        setContentLines([{ text: '', checked: false }])
+      }
+    }
+  }, [isOpen, editTask])
 
   async function handleSubmit(event) {
     event.preventDefault()
-    if (!formData.content.trim()) return
+    
+    // 確保提交前內容已同步
+    let finalContent = formData.content.trim()
+    if (isChecklistMode) {
+      finalContent = contentLines
+        .map((line) => {
+          const text = line.text.trim()
+          if (!text) return ''
+          return line.checked ? `- [ ] ${text}` : text
+        })
+        .filter(Boolean)
+        .join('\n')
+    }
+
+    if (!finalContent) return
 
     setLoading(true)
     const deadline = formData.deadline ? new Date(formData.deadline).toISOString() : null
-    const { error } = await supabase.from('tasks').insert([
-      {
-        content: formData.content.trim(),
-        category_name: formData.category_name,
-        type: formData.type,
-        priority: formData.priority,
-        deadline,
-        image_urls: formData.image_urls,
-        checklist: formData.checklist,
-        workflow: 'general',
-        creator_id: creatorId,
-        creator_name: creatorName,
-        status: 0,
-        history: [
-          {
-            action: '建立事項',
-            time: new Date().toISOString(),
-            user: creatorName,
-          },
-        ],
-      },
-    ])
 
-    if (error) {
-      alert(`新增失敗：${error.message}`)
+    if (isEditMode) {
+      const { error } = await supabase
+        .from('tasks')
+        .update({
+          content: finalContent,
+          category_name: formData.category_name,
+          type: formData.type,
+          priority: formData.priority,
+          deadline,
+          image_urls: formData.image_urls,
+          checklist: formData.checklist,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editTask.id)
+
+      if (error) {
+        alert(`更新失敗：${error.message}`)
+      } else {
+        await onTaskAdded()
+        onClose()
+      }
     } else {
-      setFormData({
-        content: '',
-        category_name: defaultCategory,
-        priority: false,
-        deadline: '',
-        image_urls: [],
-        checklist: [],
-      })
-      setCheckItem('')
-      await onTaskAdded()
-      onClose()
-    }
+      const { error } = await supabase.from('tasks').insert([
+        {
+          content: finalContent,
+          category_name: formData.category_name,
+          type: formData.type,
+          priority: formData.priority,
+          deadline,
+          image_urls: formData.image_urls,
+          checklist: formData.checklist,
+          workflow: formData.type === '檢體收送' ? 'specimen' : 'general',
+          creator_id: creatorId,
+          creator_name: creatorName,
+          status: 0,
+          history: [
+            {
+              action: '建立事項',
+              time: new Date().toISOString(),
+              user: creatorName,
+            },
+          ],
+        },
+      ])
 
+      if (error) {
+        alert(`新增失敗：${error.message}`)
+      } else {
+        setFormData({
+          content: '',
+          category_name: defaultCategory,
+          type: '工作交接',
+          priority: false,
+          deadline: '',
+          image_urls: [],
+          checklist: [],
+        })
+        setCheckItem('')
+        await onTaskAdded()
+        onClose()
+      }
+    }
     setLoading(false)
   }
 
@@ -156,48 +240,77 @@ export default function TaskModal({
   const [contentLines, setContentLines] = useState([{ text: '', checked: false }])
 
   const [isChecklistMode, setIsChecklistMode] = useState(false)
+  const savedHtmlRef = useRef(null) // 切換勾選模式時保存原始 HTML
 
   // 將 contentLines 同步到 formData.content（用 markdown 格式儲存）
   function syncContentFromLines(lines) {
     if (!isChecklistMode) return
     const content = lines
       .map((line) => {
-        const text = line.text.trim()
-        if (!text) return ''
-        if (line.checked) return `- [ ] ${text}`
-        return text
+        // 取得純文字版本判斷是否空白
+        const plain = (line.text || '').replace(/<[^>]+>/g, '').trim()
+        if (!plain) return ''
+        if (line.checked) return `- [ ] ${plain}`
+        return plain
       })
       .filter(Boolean)
       .join('\n')
     setFormData((prev) => ({ ...prev, content }))
   }
 
-  function handleLineChange(index, value) {
+  function handleLineChange(index, htmlValue) {
     const next = [...contentLines]
-    next[index] = { ...next[index], text: value }
+    next[index] = { ...next[index], text: htmlValue }
     setContentLines(next)
     syncContentFromLines(next)
   }
 
-  // 當切換模式時，如果是從文字切換到勾選，嘗試將每一行轉換成勾選項目
+  // 將 HTML 按行拆分，但保留每行的 inline 格式標籤
+  function splitHtmlToLines(html) {
+    if (!html) return []
+    // 先把 <div> 和 <br> 當作換行分隔符
+    let processed = html
+    processed = processed.replace(/<div>/gi, '\n').replace(/<\/div>/gi, '')
+    processed = processed.replace(/<br\s*\/?>/gi, '\n')
+    // 拆行
+    const lines = processed.split('\n').filter(l => {
+      const plain = l.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').trim()
+      return plain.length > 0
+    })
+    return lines
+  }
+
+  // 當切換模式時
   function toggleMode(enabled) {
     setIsChecklistMode(enabled)
     if (enabled) {
-      const lines = formData.content.split('\n').filter(l => l.trim() !== '')
-      if (lines.length > 0) {
-        const nextLines = lines.map(text => {
-          const isCheck = /^-\s*\[[xX ]?\]\s*/.test(text)
-          return { text: text.replace(/^-\s*\[[xX ]?\]\s*/, ''), checked: isCheck }
+      // 保存原始 HTML（保留顏色等格式）
+      savedHtmlRef.current = formData.content
+      const htmlLines = splitHtmlToLines(formData.content)
+      if (htmlLines.length > 0) {
+        const nextLines = htmlLines.map(lineHtml => {
+          const plainText = lineHtml.replace(/<[^>]+>/g, '')
+          const isCheck = /^-\s*\[[xX ]?\]\s*/.test(plainText)
+          // 移除 markdown 前綴（從純文字版本找到前綴位置，然後從 HTML 中去掉對應文字）
+          const cleanHtml = isCheck 
+            ? lineHtml.replace(/^(-\s*\[[xX ]?\]\s*)/, '').replace(/^(<[^>]+>)*-\s*\[[xX ]?\]\s*/, '$1')
+            : lineHtml
+          return { text: cleanHtml, checked: isCheck }
         })
         setContentLines(nextLines)
-        // 立即同步回 markdown 格式
-        const content = nextLines.map(line => line.checked ? `- [ ] ${line.text}` : line.text).join('\n')
-        setFormData(prev => ({ ...prev, content }))
+      } else {
+        setContentLines([{ text: '', checked: false }])
       }
     } else {
-      // 如果從勾選切換回文字，去掉 markdown 前綴
-      const plainContent = contentLines.map(l => l.text).filter(Boolean).join('\n')
-      setFormData(prev => ({ ...prev, content: plainContent }))
+      // 切回文字模式時，還原原始 HTML（保留顏色）
+      const htmlToRestore = savedHtmlRef.current
+      savedHtmlRef.current = null
+      if (htmlToRestore) {
+        setFormData(prev => ({ ...prev, content: htmlToRestore }))
+      } else {
+        const plainContent = contentLines.map(l => (l.text || '').replace(/<[^>]+>/g, '')).filter(Boolean).join('\n')
+        setFormData(prev => ({ ...prev, content: plainContent }))
+      }
     }
   }
 
@@ -215,45 +328,44 @@ export default function TaskModal({
       next.splice(index + 1, 0, { text: '', checked: false })
       setContentLines(next)
       syncContentFromLines(next)
-      // 聚焦到新行
       setTimeout(() => {
         const el = document.getElementById(`content-line-${index + 1}`)
         if (el) el.focus()
-      }, 0)
-    }
-    if (event.key === 'Backspace' && contentLines[index].text === '' && contentLines.length > 1) {
-      event.preventDefault()
-      const next = [...contentLines]
-      next.splice(index, 1)
-      setContentLines(next)
-      syncContentFromLines(next)
-      setTimeout(() => {
-        const focusIdx = Math.max(0, index - 1)
-        const el = document.getElementById(`content-line-${focusIdx}`)
-        if (el) el.focus()
-      }, 0)
+      }, 50)
+    } else if (event.key === 'Backspace') {
+      const plain = (contentLines[index].text || '').replace(/<[^>]+>/g, '').trim()
+      if (plain === '' && contentLines.length > 1) {
+        event.preventDefault()
+        const next = contentLines.filter((_, i) => i !== index)
+        setContentLines(next)
+        syncContentFromLines(next)
+        setTimeout(() => {
+          const focusIdx = Math.max(0, index - 1)
+          const el = document.getElementById(`content-line-${focusIdx}`)
+          if (el) el.focus()
+        }, 50)
+      }
     }
   }
 
   function removeLine(index) {
-    if (contentLines.length <= 1) {
-      const next = [{ text: '', checked: false }]
-      setContentLines(next)
-      syncContentFromLines(next)
-      return
-    }
-    const next = [...contentLines]
-    next.splice(index, 1)
+    if (contentLines.length <= 1) return
+    const next = contentLines.filter((_, i) => i !== index)
     setContentLines(next)
     syncContentFromLines(next)
   }
 
   function autoResize(e) {
-    e.target.style.height = 'auto'
-    e.target.style.height = (e.target.scrollHeight) + 'px'
+    const el = e.target || e.currentTarget
+    if (el) {
+      el.style.height = 'auto'
+      el.style.height = el.scrollHeight + 'px'
+    }
   }
 
-  function handleImages(event) {
+
+
+  async function handleImages(event) {
     const remaining = 9 - formData.image_urls.length
     if (remaining <= 0) {
       alert('最多只能上傳 9 張圖片。')
@@ -262,27 +374,19 @@ export default function TaskModal({
     const files = Array.from(event.target.files || []).slice(0, remaining)
     if (!files.length) return
 
-    Promise.all(files.map((file) => new Promise((resolve, reject) => {
-      if (file.size > 1024 * 1024) {
-        reject(new Error(`${file.name} 超過 1MB，請先壓縮後再上傳。`))
-        return
-      }
-
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result)
-      reader.onerror = () => reject(new Error(`${file.name} 讀取失敗`))
-      reader.readAsDataURL(file)
-    })))
-      .then((images) => {
-        setFormData({
-          ...formData,
-          image_urls: [...formData.image_urls, ...images].slice(0, 9),
-        })
+    setLoading(true)
+    try {
+      const compressedImages = await Promise.all(files.map((file) => compressImage(file)))
+      setFormData({
+        ...formData,
+        image_urls: [...formData.image_urls, ...compressedImages].slice(0, 9),
       })
-      .catch((error) => alert(error.message))
-      .finally(() => {
-        event.target.value = ''
-      })
+    } catch (error) {
+      alert(`處理圖片時發生錯誤: ${error.message}`)
+    } finally {
+      setLoading(false)
+      event.target.value = ''
+    }
   }
 
   return (
@@ -298,28 +402,6 @@ export default function TaskModal({
           </button>
         </div>
 
-        <div className="field" style={{ marginBottom: '20px' }}>
-          <span>事項類型</span>
-          <div className="type-selector" style={{ display: 'flex', gap: '10px' }}>
-            <button
-              type="button"
-              className={`type-button ${formData.type === '工作交接' ? 'active' : ''}`}
-              onClick={() => setFormData({ ...formData, type: '工作交接' })}
-              style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: formData.type === '工作交接' ? 'var(--primary-soft)' : 'transparent', color: formData.type === '工作交接' ? 'var(--primary)' : 'inherit', fontWeight: formData.type === '工作交接' ? '600' : '400' }}
-            >
-              工作交接
-            </button>
-            <button
-              type="button"
-              className={`type-button ${formData.type === '檢體收送' ? 'active' : ''}`}
-              onClick={() => setFormData({ ...formData, type: '檢體收送' })}
-              style={{ flex: 1, padding: '10px', borderRadius: '8px', border: '1px solid var(--border)', background: formData.type === '檢體收送' ? 'var(--primary-soft)' : 'transparent', color: formData.type === '檢體收送' ? 'var(--primary)' : 'inherit', fontWeight: formData.type === '檢體收送' ? '600' : '400' }}
-            >
-              檢體收送
-            </button>
-          </div>
-        </div>
-
         <div className="field">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
             <span>內容</span>
@@ -327,7 +409,8 @@ export default function TaskModal({
               <input 
                 type="checkbox" 
                 checked={isChecklistMode} 
-                onChange={(e) => toggleMode(e.target.checked)} 
+                onChange={(e) => toggleMode(e.target.checked)}
+                style={{ width: '15px', height: '15px', minHeight: 'auto' }}
               />
               開啟逐行勾選功能
             </label>
@@ -343,16 +426,24 @@ export default function TaskModal({
                     checked={line.checked}
                     onChange={() => handleLineCheck(index)}
                   />
-                  <textarea
+                  <div
                     id={`content-line-${index}`}
                     className="line-editor-textarea"
-                    value={line.text}
-                    rows={1}
-                    onChange={(e) => handleLineChange(index, e.target.value)}
+                    contentEditable={true}
+                    dangerouslySetInnerHTML={{ __html: line.text || '' }}
+                    onInput={(e) => handleLineChange(index, e.currentTarget.innerHTML)}
                     onKeyDown={(e) => handleLineKeyDown(index, e)}
-                    onInput={autoResize}
-                    placeholder={index === 0 ? '寫下內容... (Enter 換行, Shift+Enter 同行內換行)' : ''}
-                    autoComplete="off"
+                    data-placeholder={index === 0 ? '寫下內容... (Enter 換行)' : ''}
+                    style={{
+                      flex: 1,
+                      minHeight: '28px',
+                      padding: '6px 8px',
+                      outline: 'none',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      color: '#000',
+                      fontWeight: 'normal',
+                    }}
                   />
                   {contentLines.length > 1 && (
                     <button type="button" className="line-editor-remove" onClick={() => removeLine(index)} title="移除此行">
@@ -363,11 +454,9 @@ export default function TaskModal({
               ))}
             </div>
           ) : (
-            <textarea
-              className="line-editor-textarea"
-              style={{ minHeight: '120px' }}
+            <ContentEditableEditor
               value={formData.content}
-              onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+              onChange={(val) => setFormData({ ...formData, content: val })}
               placeholder="輸入事項內容..."
             />
           )}
