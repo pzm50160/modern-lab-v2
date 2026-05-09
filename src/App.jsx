@@ -178,6 +178,7 @@ function App() {
   const moduleRef = React.useRef('general')
   const [unreadChatCount, setUnreadChatCount] = useState(0)
   const [recheckPendingCount, setRecheckPendingCount] = useState(0)
+  const [recheckSeenCount, setRecheckSeenCount] = useState(0)
   const [activeTab, setActiveTab] = useState('all')
   const [query, setQuery] = useState('')
   const [searchStartDate, setSearchStartDate] = useState('')
@@ -654,11 +655,11 @@ function App() {
               <span className="chat-unread-badge">{unreadChatCount > 99 ? '99+' : unreadChatCount}</span>
             )}
           </button>
-          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('recheck')} style={{ position: 'relative' }}>
+          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => { setModule('recheck'); setRecheckSeenCount(recheckPendingCount) }} style={{ position: 'relative' }}>
             <FlaskConical size={17} />
             複驗
-            {recheckPendingCount > 0 && module !== 'recheck' && (
-              <span className="chat-unread-badge">{recheckPendingCount > 99 ? '99+' : recheckPendingCount}</span>
+            {(recheckPendingCount - recheckSeenCount) > 0 && module !== 'recheck' && (
+              <span className="chat-unread-badge">{(recheckPendingCount - recheckSeenCount) > 99 ? '99+' : (recheckPendingCount - recheckSeenCount)}</span>
             )}
           </button>
         </div>
