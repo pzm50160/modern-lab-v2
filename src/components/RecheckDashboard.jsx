@@ -1,307 +1,271 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { Plus, Trash2, RefreshCw } from 'lucide-react'
+import { Trash2, RefreshCw } from 'lucide-react'
 
 const COLS = [
-  { key: 'date',          label: '送檢日期', type: 'date',  width: '110px' },
-  { key: 'sender',        label: '送檢單位', type: 'text',  width: '100px' },
-  { key: 'vendor',        label: '廠商',     type: 'text',  width: '100px' },
-  { key: 'specimen_id',   label: '檢驗編號', type: 'text',  width: '90px'  },
-  { key: 'patient_name',  label: '姓名',     type: 'text',  width: '80px'  },
-  { key: 'test_item',     label: '項目',     type: 'text',  width: '80px'  },
-  { key: 'initial_value', label: '初驗值',   type: 'text',  width: '80px'  },
-  { key: 'recheck_value', label: '複驗值',   type: 'text',  width: '80px'  },
-  { key: 'note',          label: '備註',     type: 'text',  width: '140px' },
+  { key: 'date',          label: '送檢日期', type: 'date', w: 118 },
+  { key: 'sender',        label: '送檢單位', type: 'text', w: 90  },
+  { key: 'vendor',        label: '廠商',     type: 'text', w: 90  },
+  { key: 'specimen_id',   label: '檢驗編號', type: 'text', w: 86  },
+  { key: 'patient_name',  label: '姓名',     type: 'text', w: 76  },
+  { key: 'test_item',     label: '項目',     type: 'text', w: 76  },
+  { key: 'initial_value', label: '初驗值',   type: 'text', w: 76  },
+  { key: 'recheck_value', label: '複驗值',   type: 'text', w: 76  },
+  { key: 'note',          label: '備註',     type: 'text', w: 120 },
 ]
 
-const SHARED_KEYS = ['date', 'sender', 'vendor'] // 新增列時繼承這些欄位
+function todayStr() { return new Date().toISOString().slice(0, 10) }
+function blankDraft() {
+  return { date: todayStr(), sender: '', vendor: '', specimen_id: '', patient_name: '', test_item: '', initial_value: '', recheck_value: '', note: '' }
+}
 
-function emptyRow(inherit = {}) {
-  return {
-    date: new Date().toISOString().slice(0, 10),
-    sender: '', vendor: '', specimen_id: '',
-    patient_name: '', test_item: '',
-    initial_value: '', recheck_value: '', note: '',
-    ...inherit,
-  }
+// ── 樣式常數 ──────────────────────────────────────────────
+const S = {
+  th: {
+    padding: '6px 8px',
+    background: '#f1f5f9',
+    fontWeight: '600',
+    fontSize: '12px',
+    color: '#64748b',
+    borderRight: '1px solid #cbd5e1',
+    borderBottom: '2px solid #94a3b8',
+    whiteSpace: 'nowrap',
+    textAlign: 'left',
+    userSelect: 'none',
+  },
+  td: { padding: 0, borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' },
+  inp: (bg = '#fff') => ({
+    width: '100%', border: 'none', outline: 'none',
+    padding: '5px 7px', fontSize: '13px',
+    background: bg, fontFamily: 'inherit', boxSizing: 'border-box',
+  }),
+  btn: (color = '#2563eb') => ({
+    padding: '2px 10px', fontSize: '12px', fontWeight: '600',
+    border: `1px solid ${color}`, borderRadius: '4px',
+    background: color, color: '#fff', cursor: 'pointer',
+    whiteSpace: 'nowrap',
+  }),
+  tab: (active) => ({
+    padding: '7px 22px', fontSize: '13px', cursor: 'pointer', border: 'none',
+    borderTop: active ? '2px solid #2563eb' : '2px solid transparent',
+    borderRight: '1px solid #e2e8f0',
+    fontWeight: active ? '700' : '400',
+    color: active ? '#1e40af' : '#64748b',
+    background: active ? '#fff' : 'transparent',
+    marginTop: '-2px',
+  }),
 }
 
 export default function RecheckDashboard({ currentUser, isAdmin }) {
-  const [records, setRecords]     = useState([])
-  const [tab, setTab]             = useState('pending')
-  const [loading, setLoading]     = useState(true)
-  const [newRows, setNewRows]     = useState([emptyRow()])
-  const [editingId, setEditingId] = useState(null)
-  const [editRow, setEditRow]     = useState({})
-  const inputRefs = useRef({}) // { `${rowIdx}-${colKey}`: el }
+  const [records, setRecords]   = useState([])
+  const [tab, setTab]           = useState('pending')
+  const [loading, setLoading]   = useState(true)
+  const [draft, setDraft]       = useState(blankDraft())   // 最下方新增列
+  const [localRows, setLocalRows] = useState({})            // { id: {key: val} } 暫存編輯
+  const dirtyRef = useRef({})                               // { id: Set<key> }
 
-  useEffect(() => { fetchRecords() }, [])
+  useEffect(() => { load() }, [])
 
-  async function fetchRecords() {
+  async function load() {
     setLoading(true)
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('recheck_records')
       .select('*')
       .order('date', { ascending: false })
       .order('created_at', { ascending: false })
-    if (!error) setRecords(data || [])
+    if (data) {
+      setRecords(data)
+      const init = {}
+      data.forEach(r => { init[r.id] = { ...r } })
+      setLocalRows(init)
+    }
     setLoading(false)
   }
 
-  function updateNewRow(rowIdx, key, value) {
-    setNewRows(prev => prev.map((r, i) => i === rowIdx ? { ...r, [key]: value } : r))
+  // ── 編輯現有列 ─────────────────────────────────────────
+  function cellChange(id, key, val) {
+    setLocalRows(prev => ({ ...prev, [id]: { ...prev[id], [key]: val } }))
+    if (!dirtyRef.current[id]) dirtyRef.current[id] = new Set()
+    dirtyRef.current[id].add(key)
   }
 
-  function addInputRow(afterIdx) {
-    const current = newRows[afterIdx]
-    const inherited = Object.fromEntries(SHARED_KEYS.map(k => [k, current[k]]))
-    const next = [...newRows.slice(0, afterIdx + 1), emptyRow(inherited), ...newRows.slice(afterIdx + 1)]
-    setNewRows(next)
-    // 下一個 tick 聚焦到新列的第一個文字欄
-    setTimeout(() => {
-      const firstTextCol = COLS.find(c => c.type === 'text')
-      const el = inputRefs.current[`${afterIdx + 1}-${firstTextCol?.key}`]
-      if (el) el.focus()
-    }, 30)
+  async function cellBlur(id) {
+    const dirty = dirtyRef.current[id]
+    if (!dirty?.size) return
+    const patch = {}
+    dirty.forEach(k => { patch[k] = localRows[id]?.[k] ?? '' })
+    dirty.clear()
+    const { error } = await supabase
+      .from('recheck_records')
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { alert(`儲存失敗：${error.message}`); load() }
+    else setRecords(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
   }
 
-  function removeInputRow(rowIdx) {
-    if (newRows.length === 1) return
-    setNewRows(prev => prev.filter((_, i) => i !== rowIdx))
+  // ── 完成 / 撤回 ────────────────────────────────────────
+  async function markDone(id) {
+    const { error } = await supabase
+      .from('recheck_records')
+      .update({ completed: true, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { alert(`失敗：${error.message}`); return }
+    setRecords(prev => prev.map(r => r.id === id ? { ...r, completed: true } : r))
   }
 
-  function handleInputKeyDown(rowIdx, colKey, e) {
+  async function undoDone(id) {
+    const { error } = await supabase
+      .from('recheck_records')
+      .update({ completed: false, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) { alert(`失敗：${error.message}`); return }
+    setRecords(prev => prev.map(r => r.id === id ? { ...r, completed: false } : r))
+  }
+
+  // ── 刪除 ───────────────────────────────────────────────
+  async function del(id) {
+    if (!window.confirm('確定要刪除此筆紀錄嗎？')) return
+    const { error } = await supabase.from('recheck_records').delete().eq('id', id)
+    if (error) { alert(`刪除失敗：${error.message}`); return }
+    setRecords(prev => prev.filter(r => r.id !== id))
+    setLocalRows(prev => { const n = { ...prev }; delete n[id]; return n })
+  }
+
+  // ── 新增草稿列 ─────────────────────────────────────────
+  async function saveDraft() {
+    if (!draft.specimen_id.trim() && !draft.patient_name.trim()) return
+    const { data, error } = await supabase
+      .from('recheck_records')
+      .insert([{ ...draft, completed: false, creator_name: currentUser }])
+      .select()
+    if (error) { alert(`新增失敗：${error.message}`); return }
+    const r = data[0]
+    setRecords(prev => [r, ...prev])
+    setLocalRows(prev => ({ ...prev, [r.id]: { ...r } }))
+    setDraft(blankDraft())
+  }
+
+  function draftKey(key, e) {
     if (e.key === 'Enter') {
       e.preventDefault()
-      if (colKey === 'test_item') {
-        // 在項目欄按 Enter → 新增一列
-        addInputRow(rowIdx)
-      } else {
-        // 其他欄按 Enter → 移到下一欄
-        const colIdx = COLS.findIndex(c => c.key === colKey)
-        const nextCol = COLS[colIdx + 1]
-        if (nextCol) {
-          const el = inputRefs.current[`${rowIdx}-${nextCol.key}`]
-          if (el) el.focus()
-        }
+      if (key === 'test_item') {
+        // Enter on 項目 → save current draft and start new one with shared fields
+        saveDraft().then(() => {
+          setDraft(prev => ({ ...blankDraft(), date: prev.date, sender: prev.sender, vendor: prev.vendor }))
+        })
+      } else if (key === 'note') {
+        saveDraft()
       }
     }
-    if (e.key === 'Backspace' && e.target.value === '' && colKey === COLS[0].key && newRows.length > 1) {
-      removeInputRow(rowIdx)
-    }
   }
 
-  async function submitAllRows() {
-    const valid = newRows.filter(r => r.specimen_id.trim() || r.patient_name.trim())
-    if (!valid.length) return
-    const payload = valid.map(r => ({ ...r, completed: false, creator_name: currentUser }))
-    const { error } = await supabase.from('recheck_records').insert(payload)
-    if (error) { alert(`新增失敗：${error.message}`); return }
-    setNewRows([emptyRow()])
-    await fetchRecords()
-  }
+  // ── 篩選顯示 ───────────────────────────────────────────
+  const pending = useMemo(() => records.filter(r => !r.completed), [records])
+  const done    = useMemo(() => records.filter(r =>  r.completed), [records])
+  const rows    = tab === 'pending' ? pending : done
+  const pendingCount = pending.length
 
-  async function saveEdit(id) {
-    const { error } = await supabase
-      .from('recheck_records')
-      .update({ ...editRow, updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (error) { alert(`儲存失敗：${error.message}`); return }
-    setRecords(prev => prev.map(r => r.id === id ? { ...r, ...editRow } : r))
-    setEditingId(null)
-  }
-
-  async function toggleComplete(record) {
-    const next = !record.completed
-    const { error } = await supabase
-      .from('recheck_records')
-      .update({ completed: next, updated_at: new Date().toISOString() })
-      .eq('id', record.id)
-    if (error) { alert(`更新失敗：${error.message}`); return }
-    setRecords(prev => prev.map(r => r.id === record.id ? { ...r, completed: next } : r))
-  }
-
-  async function deleteRecord(record) {
-    if (!window.confirm('確定要刪除此筆複驗紀錄嗎？')) return
-    const { error } = await supabase.from('recheck_records').delete().eq('id', record.id)
-    if (error) { alert(`刪除失敗：${error.message}`); return }
-    setRecords(prev => prev.filter(r => r.id !== record.id))
-  }
-
-  const filtered = useMemo(() =>
-    records.filter(r => tab === 'pending' ? !r.completed : r.completed),
-    [records, tab]
-  )
-
-  const pendingCount = records.filter(r => !r.completed).length
-
-  const cellStyle = {
-    padding: '6px 8px',
-    borderRight: '1px solid var(--border)',
-    whiteSpace: 'nowrap',
-    fontSize: '13px',
-  }
-  const inputStyle = {
-    width: '100%',
-    border: 'none',
-    background: 'transparent',
-    fontSize: '13px',
-    outline: 'none',
-    padding: '0',
-  }
-
+  // ── 渲染 ───────────────────────────────────────────────
   return (
-    <>
-      <section className="work-header">
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)', minHeight: 400 }}>
+
+      {/* 標題列 */}
+      <section className="work-header" style={{ marginBottom: 8 }}>
         <div>
           <p className="eyebrow">複驗追蹤</p>
           <h1>待處理 {pendingCount} 件</h1>
         </div>
         <div className="header-actions">
-          <button className="icon-text-button ghost" onClick={fetchRecords} disabled={loading}>
-            <RefreshCw size={16} className={loading ? 'spin' : ''} />
+          <button className="icon-text-button ghost" onClick={load} disabled={loading}>
+            <RefreshCw size={15} className={loading ? 'spin' : ''} />
             重新整理
           </button>
         </div>
       </section>
 
-      <section className="tool-row">
-        <div className="tabs">
-          <button className={tab === 'pending' ? 'tab active' : 'tab'} onClick={() => setTab('pending')}>
-            待處理
-            {pendingCount > 0 && (
-              <span style={{ background: 'var(--red)', color: 'white', padding: '2px 6px', borderRadius: '10px', fontSize: '11px', marginLeft: '4px' }}>
-                {pendingCount}
-              </span>
-            )}
-          </button>
-          <button className={tab === 'done' ? 'tab active' : 'tab'} onClick={() => setTab('done')}>
-            已處理
-          </button>
-        </div>
-      </section>
-
-      <div style={{ overflowX: 'auto', marginTop: '12px', borderRadius: '8px', border: '1px solid var(--border)', background: '#fff' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px' }}>
-          <thead>
-            <tr style={{ background: 'var(--surface-soft)', borderBottom: '2px solid var(--border)' }}>
-              {COLS.map(col => (
-                <th key={col.key} style={{ ...cellStyle, fontWeight: '600', width: col.width, minWidth: col.width, color: 'var(--text-muted)', fontSize: '12px', letterSpacing: '0.03em' }}>
-                  {col.label}
-                </th>
-              ))}
-              <th style={{ ...cellStyle, textAlign: 'center', width: '72px', fontWeight: '600', color: 'var(--text-muted)', fontSize: '12px' }}>處理完成</th>
-              <th style={{ width: '36px' }} />
+      {/* 表格 */}
+      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', border: '1px solid #cbd5e1', borderRadius: '4px 4px 0 0', background: '#fff' }}>
+        <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900, width: '100%' }}>
+          <colgroup>
+            {COLS.map(c => <col key={c.key} style={{ width: c.w }} />)}
+            <col style={{ width: 68 }} />
+            <col style={{ width: 34 }} />
+          </colgroup>
+          <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
+            <tr>
+              {COLS.map(c => <th key={c.key} style={S.th}>{c.label}</th>)}
+              <th style={{ ...S.th, textAlign: 'center' }}>處理完成</th>
+              <th style={{ ...S.th, padding: '6px 4px' }} />
             </tr>
           </thead>
           <tbody>
-            {/* 輸入列（多列） */}
-            {tab === 'pending' && newRows.map((row, rowIdx) => (
-              <tr key={rowIdx} style={{ background: '#f0f9ff', borderBottom: '1px solid var(--border)' }}>
-                {COLS.map(col => (
-                  <td key={col.key} style={{ ...cellStyle, padding: '3px 5px' }}>
+            {/* 新增草稿列（僅待處理分頁） */}
+            {tab === 'pending' && (
+              <tr style={{ background: '#eff6ff' }}>
+                {COLS.map(c => (
+                  <td key={c.key} style={S.td}>
                     <input
-                      ref={el => { inputRefs.current[`${rowIdx}-${col.key}`] = el }}
-                      type={col.type}
-                      value={row[col.key]}
-                      onChange={e => updateNewRow(rowIdx, col.key, e.target.value)}
-                      onKeyDown={e => handleInputKeyDown(rowIdx, col.key, e)}
-                      style={{ ...inputStyle, background: 'white', border: '1px solid var(--border)', borderRadius: '4px', padding: '3px 6px' }}
-                      placeholder={col.label}
+                      type={c.type}
+                      value={draft[c.key]}
+                      placeholder={c.label}
+                      onChange={e => setDraft(p => ({ ...p, [c.key]: e.target.value }))}
+                      onKeyDown={e => draftKey(c.key, e)}
+                      style={S.inp('#eff6ff')}
                     />
                   </td>
                 ))}
-                {/* 最後一列顯示送出按鈕，其餘顯示刪除列按鈕 */}
-                <td style={{ ...cellStyle, textAlign: 'center', padding: '3px 5px' }}>
-                  {rowIdx === newRows.length - 1 ? (
-                    <button
-                      className="icon-text-button primary"
-                      onClick={submitAllRows}
-                      style={{ padding: '3px 10px', fontSize: '12px', whiteSpace: 'nowrap' }}
-                    >
-                      <Plus size={13} />
-                      新增
-                    </button>
-                  ) : (
-                    <button
-                      className="icon-button mini"
-                      onClick={() => removeInputRow(rowIdx)}
-                      title="移除此列"
-                      style={{ color: 'var(--text-muted)' }}
-                    >
-                      ✕
-                    </button>
-                  )}
+                <td style={{ ...S.td, textAlign: 'center', padding: '4px 6px' }}>
+                  <button style={S.btn('#2563eb')} onClick={saveDraft}>+ 儲存</button>
                 </td>
-                <td style={{ padding: '3px' }}>
-                  {rowIdx === newRows.length - 1 && newRows.length === 1 ? null : (
-                    <button
-                      className="icon-button mini"
-                      onClick={() => addInputRow(rowIdx)}
-                      title="在此列下方新增一列"
-                      style={{ color: 'var(--blue)' }}
-                    >
-                      +
-                    </button>
-                  )}
-                </td>
+                <td style={S.td} />
               </tr>
-            ))}
+            )}
 
-            {/* 已儲存的資料列 */}
-            {filtered.map(record => (
-              <tr
-                key={record.id}
-                style={{ borderBottom: '1px solid var(--border)', background: record.completed ? 'var(--surface-soft)' : 'white', opacity: record.completed ? 0.65 : 1 }}
-                onDoubleClick={() => { setEditingId(record.id); setEditRow({ ...record }) }}
-              >
-                {COLS.map(col => (
-                  <td key={col.key} style={{ ...cellStyle }}>
-                    {editingId === record.id ? (
-                      <input
-                        type={col.type}
-                        value={editRow[col.key] || ''}
-                        onChange={e => setEditRow(prev => ({ ...prev, [col.key]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === 'Enter') saveEdit(record.id); if (e.key === 'Escape') setEditingId(null) }}
-                        style={{ ...inputStyle, borderBottom: '1px solid var(--blue)' }}
-                        autoFocus={col.key === 'date'}
-                      />
+            {/* 資料列 */}
+            {rows.map(record => {
+              const local = localRows[record.id] || record
+              const isPending = !record.completed
+              return (
+                <tr key={record.id} style={{ background: isPending ? '#fff' : '#f8fafc' }}>
+                  {COLS.map(c => (
+                    <td key={c.key} style={S.td}>
+                      {isPending ? (
+                        <input
+                          type={c.type}
+                          value={local[c.key] ?? ''}
+                          onChange={e => cellChange(record.id, c.key, e.target.value)}
+                          onBlur={() => cellBlur(record.id)}
+                          style={S.inp('#fff')}
+                        />
+                      ) : (
+                        <span style={{ display: 'block', padding: '5px 7px', fontSize: '13px', color: '#64748b' }}>
+                          {record[c.key] || ''}
+                        </span>
+                      )}
+                    </td>
+                  ))}
+                  <td style={{ ...S.td, textAlign: 'center', padding: '3px 6px' }}>
+                    {isPending ? (
+                      <button style={S.btn('#16a34a')} onClick={() => markDone(record.id)}>完成</button>
                     ) : (
-                      <span style={{ textDecoration: record.completed ? 'line-through' : 'none' }}>
-                        {record[col.key] || <span style={{ color: 'var(--text-muted)' }}>—</span>}
-                      </span>
+                      <button style={{ ...S.btn('#64748b'), background: 'transparent', color: '#64748b' }} onClick={() => undoDone(record.id)}>撤回</button>
                     )}
                   </td>
-                ))}
-                <td style={{ ...cellStyle, textAlign: 'center' }}>
-                  {editingId === record.id ? (
-                    <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
-                      <button className="icon-text-button primary" style={{ padding: '2px 8px', fontSize: '12px' }} onClick={() => saveEdit(record.id)}>儲存</button>
-                      <button className="icon-text-button ghost" style={{ padding: '2px 8px', fontSize: '12px' }} onClick={() => setEditingId(null)}>取消</button>
-                    </div>
-                  ) : (
-                    <input
-                      type="checkbox"
-                      checked={record.completed}
-                      onChange={() => toggleComplete(record)}
-                      style={{ width: '16px', height: '16px', cursor: 'pointer', accentColor: '#16a34a' }}
-                    />
-                  )}
-                </td>
-                <td style={{ padding: '4px', textAlign: 'center' }}>
-                  {(isAdmin || record.creator_name === currentUser) && (
-                    <button className="icon-button mini" onClick={() => deleteRecord(record)} title="刪除" style={{ color: 'var(--red)' }}>
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
+                  <td style={{ ...S.td, textAlign: 'center', padding: '3px' }}>
+                    {(isAdmin || record.creator_name === currentUser) && (
+                      <button onClick={() => del(record.id)} title="刪除" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', display: 'flex', alignItems: 'center' }}>
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
 
-            {filtered.length === 0 && (
+            {rows.length === 0 && tab === 'done' && (
               <tr>
-                <td colSpan={COLS.length + 2} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
-                  {tab === 'pending' ? '目前沒有待處理的複驗紀錄' : '尚無已處理紀錄'}
+                <td colSpan={COLS.length + 2} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8', fontSize: '14px' }}>
+                  尚無已處理紀錄
                 </td>
               </tr>
             )}
@@ -309,9 +273,15 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
         </table>
       </div>
 
-      <p style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' }}>
-        提示：在「項目」欄按 Enter 可快速新增一列（自動帶入日期、送檢單位、廠商）；雙擊已有資料可編輯
-      </p>
-    </>
+      {/* Excel 風格底部分頁 */}
+      <div style={{ display: 'flex', alignItems: 'flex-end', borderTop: '2px solid #cbd5e1', background: '#f8fafc', flexShrink: 0 }}>
+        <button style={S.tab(tab === 'pending')} onClick={() => setTab('pending')}>
+          待處理{pendingCount > 0 ? ` (${pendingCount})` : ''}
+        </button>
+        <button style={S.tab(tab === 'done')} onClick={() => setTab('done')}>
+          已處理{done.length > 0 ? ` (${done.length})` : ''}
+        </button>
+      </div>
+    </div>
   )
 }
