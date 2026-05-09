@@ -1,285 +1,317 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { Trash2, RefreshCw } from 'lucide-react'
 
-const COLS = [
-  { key: 'date',          label: '送檢日期', type: 'date', w: 118 },
-  { key: 'sender',        label: '送檢單位', type: 'text', w: 90  },
-  { key: 'vendor',        label: '廠商',     type: 'text', w: 90  },
-  { key: 'specimen_id',   label: '檢驗編號', type: 'text', w: 86  },
-  { key: 'patient_name',  label: '姓名',     type: 'text', w: 76  },
-  { key: 'test_item',     label: '項目',     type: 'text', w: 76  },
-  { key: 'initial_value', label: '初驗值',   type: 'text', w: 76  },
-  { key: 'recheck_value', label: '複驗值',   type: 'text', w: 76  },
-  { key: 'note',          label: '備註',     type: 'text', w: 120 },
-]
+// ── 欄位定義 ───────────────────────────────────────────────
+const LABELS = ['送檢日期','送檢單位','廠商','檢驗編號','姓名','項目','初驗值','複驗值','備註','完成']
+const KEYS   = ['date','sender','vendor','specimen_id','patient_name','test_item','initial_value','recheck_value','note','_v']
+const WIDTHS = [110, 90, 90, 85, 75, 75, 72, 72, 130, 52]
+const NC = KEYS.length
+const DONE_C = NC - 1
 
-function todayStr() { return new Date().toISOString().slice(0, 10) }
-function blankDraft() {
-  return { date: todayStr(), sender: '', vendor: '', specimen_id: '', patient_name: '', test_item: '', initial_value: '', recheck_value: '', note: '' }
+let _uid = 0
+function mkRow(db = {}) {
+  return {
+    _k:  ++_uid,
+    _id: db.id || null,
+    date:          db.date          || '',
+    sender:        db.sender        || '',
+    vendor:        db.vendor        || '',
+    specimen_id:   db.specimen_id   || '',
+    patient_name:  db.patient_name  || '',
+    test_item:     db.test_item     || '',
+    initial_value: db.initial_value || '',
+    recheck_value: db.recheck_value || '',
+    note:          db.note          || '',
+    _v:            db.completed     ? 'V' : '',
+    creator_name:  db.creator_name  || '',
+  }
+}
+function hasData(row) {
+  return KEYS.slice(0, DONE_C).some(k => (row[k] || '').trim() !== '')
 }
 
-// ── 樣式常數 ──────────────────────────────────────────────
-const S = {
-  th: {
-    padding: '6px 8px',
-    background: '#f1f5f9',
-    fontWeight: '600',
-    fontSize: '12px',
-    color: '#64748b',
-    borderRight: '1px solid #cbd5e1',
-    borderBottom: '2px solid #94a3b8',
-    whiteSpace: 'nowrap',
-    textAlign: 'left',
-    userSelect: 'none',
-  },
-  td: { padding: 0, borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' },
-  inp: (bg = '#fff') => ({
-    width: '100%', border: 'none', outline: 'none',
-    padding: '5px 7px', fontSize: '13px',
-    background: bg, fontFamily: 'inherit', boxSizing: 'border-box',
-  }),
-  btn: (color = '#2563eb') => ({
-    padding: '2px 10px', fontSize: '12px', fontWeight: '600',
-    border: `1px solid ${color}`, borderRadius: '4px',
-    background: color, color: '#fff', cursor: 'pointer',
-    whiteSpace: 'nowrap',
-  }),
-  tab: (active) => ({
-    padding: '7px 22px', fontSize: '13px', cursor: 'pointer', border: 'none',
-    borderTop: active ? '2px solid #2563eb' : '2px solid transparent',
-    borderRight: '1px solid #e2e8f0',
-    fontWeight: active ? '700' : '400',
-    color: active ? '#1e40af' : '#64748b',
-    background: active ? '#fff' : 'transparent',
-    marginTop: '-2px',
-  }),
-}
-
+// ── 主元件 ─────────────────────────────────────────────────
 export default function RecheckDashboard({ currentUser, isAdmin }) {
-  const [records, setRecords]   = useState([])
-  const [tab, setTab]           = useState('pending')
-  const [loading, setLoading]   = useState(true)
-  const [draft, setDraft]       = useState(blankDraft())   // 最下方新增列
-  const [localRows, setLocalRows] = useState({})            // { id: {key: val} } 暫存編輯
-  const dirtyRef = useRef({})                               // { id: Set<key> }
+  const [tab, setTab]         = useState('pending')
+  const [pending, setPending] = useState([mkRow()])
+  const [done, setDone]       = useState([])
+  const [sel, setSel]         = useState([0, 0])
 
+  const pendRef  = useRef(pending)
+  const timers   = useRef({})   // { _k: timeoutId }
+  const cellRefs = useRef({})   // { 'r-c': inputEl }
+
+  useEffect(() => { pendRef.current = pending }, [pending])
   useEffect(() => { load() }, [])
 
+  // ── 載入 ───────────────────────────────────────────────
   async function load() {
-    setLoading(true)
     const { data } = await supabase
       .from('recheck_records')
       .select('*')
       .order('date', { ascending: false })
-      .order('created_at', { ascending: false })
-    if (data) {
-      setRecords(data)
-      const init = {}
-      data.forEach(r => { init[r.id] = { ...r } })
-      setLocalRows(init)
-    }
-    setLoading(false)
+    if (!data) return
+    const p = data.filter(r => !r.completed).map(mkRow)
+    const d = data.filter(r =>  r.completed).map(mkRow)
+    setPending([...p, mkRow()])
+    setDone(d)
   }
 
-  // ── 編輯現有列 ─────────────────────────────────────────
-  function cellChange(id, key, val) {
-    setLocalRows(prev => ({ ...prev, [id]: { ...prev[id], [key]: val } }))
-    if (!dirtyRef.current[id]) dirtyRef.current[id] = new Set()
-    dirtyRef.current[id].add(key)
+  // ── 聚焦 ───────────────────────────────────────────────
+  function moveTo(r, c) {
+    const rows = tab === 'pending' ? pendRef.current : done
+    const nr = Math.max(0, Math.min(r, rows.length - 1))
+    const nc = Math.max(0, Math.min(c, NC - 1))
+    setSel([nr, nc])
+    setTimeout(() => {
+      const el = cellRefs.current[`${nr}-${nc}`]
+      if (el) { el.focus(); el.select() }
+    }, 0)
   }
 
-  async function cellBlur(id) {
-    const dirty = dirtyRef.current[id]
-    if (!dirty?.size) return
-    const patch = {}
-    dirty.forEach(k => { patch[k] = localRows[id]?.[k] ?? '' })
-    dirty.clear()
-    const { error } = await supabase
-      .from('recheck_records')
-      .update({ ...patch, updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (error) { alert(`儲存失敗：${error.message}`); load() }
-    else setRecords(prev => prev.map(r => r.id === id ? { ...r, ...patch } : r))
-  }
-
-  // ── 完成 / 撤回 ────────────────────────────────────────
-  async function markDone(id) {
-    const { error } = await supabase
-      .from('recheck_records')
-      .update({ completed: true, updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (error) { alert(`失敗：${error.message}`); return }
-    setRecords(prev => prev.map(r => r.id === id ? { ...r, completed: true } : r))
-  }
-
-  async function undoDone(id) {
-    const { error } = await supabase
-      .from('recheck_records')
-      .update({ completed: false, updated_at: new Date().toISOString() })
-      .eq('id', id)
-    if (error) { alert(`失敗：${error.message}`); return }
-    setRecords(prev => prev.map(r => r.id === id ? { ...r, completed: false } : r))
-  }
-
-  // ── 刪除 ───────────────────────────────────────────────
-  async function del(id) {
-    if (!window.confirm('確定要刪除此筆紀錄嗎？')) return
-    const { error } = await supabase.from('recheck_records').delete().eq('id', id)
-    if (error) { alert(`刪除失敗：${error.message}`); return }
-    setRecords(prev => prev.filter(r => r.id !== id))
-    setLocalRows(prev => { const n = { ...prev }; delete n[id]; return n })
-  }
-
-  // ── 新增草稿列 ─────────────────────────────────────────
-  async function saveDraft() {
-    if (!draft.specimen_id.trim() && !draft.patient_name.trim()) return
-    const { data, error } = await supabase
-      .from('recheck_records')
-      .insert([{ ...draft, completed: false, creator_name: currentUser }])
-      .select()
-    if (error) { alert(`新增失敗：${error.message}`); return }
-    const r = data[0]
-    setRecords(prev => [r, ...prev])
-    setLocalRows(prev => ({ ...prev, [r.id]: { ...r } }))
-    setDraft(blankDraft())
-  }
-
-  function draftKey(key, e) {
-    if (e.key === 'Enter') {
+  // ── 鍵盤導航 ───────────────────────────────────────────
+  function onKeyDown(r, c, e) {
+    const el = e.target
+    const atStart = el.selectionStart === 0
+    const atEnd   = el.selectionStart === el.value.length
+    if (e.key === 'ArrowUp')    { e.preventDefault(); moveTo(r - 1, c) }
+    if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); moveTo(r + 1, c) }
+    if (e.key === 'ArrowLeft'  && atStart) { e.preventDefault(); moveTo(r, c - 1) }
+    if (e.key === 'ArrowRight' && atEnd)   { e.preventDefault(); moveTo(r, c + 1) }
+    if (e.key === 'Tab') {
       e.preventDefault()
-      if (key === 'test_item') {
-        // Enter on 項目 → save current draft and start new one with shared fields
-        saveDraft().then(() => {
-          setDraft(prev => ({ ...blankDraft(), date: prev.date, sender: prev.sender, vendor: prev.vendor }))
+      e.shiftKey
+        ? (c > 0 ? moveTo(r, c - 1) : moveTo(r - 1, NC - 1))
+        : (c < NC - 1 ? moveTo(r, c + 1) : moveTo(r + 1, 0))
+    }
+  }
+
+  // ── 貼上（支援從 Excel/Sheets 複製多格貼上） ───────────
+  function onPaste(e) {
+    if (tab !== 'pending') return
+    e.preventDefault()
+    const text = (e.clipboardData || window.clipboardData).getData('text')
+    const pasteGrid = text.replace(/\r/g, '').split('\n').filter(Boolean).map(l => l.split('\t'))
+    const [sr, sc] = sel
+
+    setPending(prev => {
+      const next = [...prev]
+      pasteGrid.forEach((cells, dr) => {
+        const ri = sr + dr
+        while (next.length <= ri + 1) next.push(mkRow())
+        cells.forEach((val, dc) => {
+          const ci = sc + dc
+          if (ci < NC) next[ri] = { ...next[ri], [KEYS[ci]]: val.trim() }
         })
-      } else if (key === 'note') {
-        saveDraft()
+        scheduleSave(next[ri]._k)
+      })
+      if (hasData(next[next.length - 1])) next.push(mkRow())
+      return next
+    })
+  }
+
+  // ── 輸入變更 ───────────────────────────────────────────
+  function onChange(r, c, val) {
+    const key = KEYS[c]
+    let shouldMarkDone = false
+
+    setPending(prev => {
+      const next = [...prev]
+      next[r] = { ...next[r], [key]: val }
+      if (r === prev.length - 1 && hasData(next[r])) next.push(mkRow())
+      scheduleSave(next[r]._k)
+      if (c === DONE_C && val.trim().toUpperCase() === 'V') shouldMarkDone = true
+      return next
+    })
+
+    if (shouldMarkDone) setTimeout(() => markDone(r), 80)
+  }
+
+  // ── 排程存檔（防抖 600ms） ─────────────────────────────
+  function scheduleSave(k) {
+    clearTimeout(timers.current[k])
+    timers.current[k] = setTimeout(() => {
+      const row = pendRef.current.find(r => r._k === k)
+      if (row && hasData(row)) saveRow(row)
+    }, 600)
+  }
+
+  // ── 存檔到 Supabase ────────────────────────────────────
+  async function saveRow(row) {
+    const body = {
+      date:          row.date   || null,
+      sender:        row.sender,
+      vendor:        row.vendor,
+      specimen_id:   row.specimen_id,
+      patient_name:  row.patient_name,
+      test_item:     row.test_item,
+      initial_value: row.initial_value,
+      recheck_value: row.recheck_value,
+      note:          row.note,
+      completed:     false,
+    }
+    if (row._id) {
+      await supabase.from('recheck_records')
+        .update({ ...body, updated_at: new Date().toISOString() })
+        .eq('id', row._id)
+    } else {
+      const { data } = await supabase.from('recheck_records')
+        .insert([{ ...body, creator_name: currentUser }])
+        .select()
+      if (data?.[0]) {
+        const newId = data[0].id
+        setPending(prev => prev.map(r => r._k === row._k ? { ...r, _id: newId } : r))
       }
     }
   }
 
-  // ── 篩選顯示 ───────────────────────────────────────────
-  const pending = useMemo(() => records.filter(r => !r.completed), [records])
-  const done    = useMemo(() => records.filter(r =>  r.completed), [records])
-  const rows    = tab === 'pending' ? pending : done
-  const pendingCount = pending.length
+  // ── 標記完成 ───────────────────────────────────────────
+  async function markDone(r) {
+    const row = pendRef.current[r]
+    if (!row || !hasData(row)) return
+
+    let id = row._id
+    if (!id) {
+      const { data } = await supabase.from('recheck_records').insert([{
+        date: row.date || null, sender: row.sender, vendor: row.vendor,
+        specimen_id: row.specimen_id, patient_name: row.patient_name,
+        test_item: row.test_item, initial_value: row.initial_value,
+        recheck_value: row.recheck_value, note: row.note,
+        completed: false, creator_name: currentUser,
+      }]).select()
+      if (!data?.[0]) return
+      id = data[0].id
+    }
+
+    await supabase.from('recheck_records').update({ completed: true }).eq('id', id)
+    const doneRow = { ...row, _id: id, _v: 'V' }
+    setDone(prev => [doneRow, ...prev])
+    setPending(prev => {
+      const next = prev.filter((_, i) => i !== r)
+      return next.length === 0 || hasData(next[next.length - 1]) ? [...next, mkRow()] : next
+    })
+  }
+
+  // ── 撤回已完成 ─────────────────────────────────────────
+  async function undoDone(row) {
+    if (!row._id) return
+    await supabase.from('recheck_records').update({ completed: false }).eq('id', row._id)
+    setDone(prev => prev.filter(r => r._k !== row._k))
+    setPending(prev => {
+      const rest = prev.filter(r => hasData(r)) // remove trailing empty
+      return [{ ...row, _v: '' }, ...rest, mkRow()]
+    })
+  }
+
+  // ── 刪除 ───────────────────────────────────────────────
+  async function del(row, fromDone) {
+    if (!confirm('確定刪除這筆紀錄嗎？')) return
+    if (row._id) await supabase.from('recheck_records').delete().eq('id', row._id)
+    if (fromDone) {
+      setDone(prev => prev.filter(r => r._k !== row._k))
+    } else {
+      setPending(prev => {
+        const next = prev.filter(r => r._k !== row._k)
+        return next.length === 0 || hasData(next[next.length - 1]) ? [...next, mkRow()] : next
+      })
+    }
+  }
 
   // ── 渲染 ───────────────────────────────────────────────
+  const rows         = tab === 'pending' ? pending : done
+  const pendingCount = pending.filter(hasData).length
+  const doneCount    = done.length
+
+  const TH = { padding: '5px 8px', background: '#f1f5f9', fontWeight: '600', fontSize: '11.5px', color: '#64748b', borderRight: '1px solid #cbd5e1', borderBottom: '2px solid #94a3b8', whiteSpace: 'nowrap', textAlign: 'left', userSelect: 'none' }
+  const tdBase = { padding: 0, borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }
+  const INP = { width: '100%', border: 'none', outline: 'none', padding: '4px 6px', fontSize: '13px', background: 'transparent', fontFamily: 'inherit', boxSizing: 'border-box', cursor: 'cell' }
+  const tabSt = (on) => ({ padding: '7px 22px', fontSize: '13px', border: 'none', borderTop: on ? '2px solid #2563eb' : '2px solid transparent', borderRight: '1px solid #e2e8f0', fontWeight: on ? '700' : '400', color: on ? '#1e40af' : '#64748b', background: on ? '#fff' : 'transparent', cursor: 'pointer', marginTop: '-2px' })
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)', minHeight: 400 }}>
 
-      {/* 標題列 */}
       <section className="work-header" style={{ marginBottom: 8 }}>
         <div>
           <p className="eyebrow">複驗追蹤</p>
           <h1>待處理 {pendingCount} 件</h1>
         </div>
-        <div className="header-actions">
-          <button className="icon-text-button ghost" onClick={load} disabled={loading}>
-            <RefreshCw size={15} className={loading ? 'spin' : ''} />
-            重新整理
-          </button>
-        </div>
       </section>
 
+      {/* 提示 */}
+      <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: 6 }}>
+        方向鍵 / Tab 移動格子　從 Excel 複製後直接貼上　在「完成」欄輸入 <strong>V</strong> 移至已處理
+      </div>
+
       {/* 表格 */}
-      <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', border: '1px solid #cbd5e1', borderRadius: '4px 4px 0 0', background: '#fff' }}>
-        <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 900, width: '100%' }}>
+      <div
+        style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', border: '1px solid #cbd5e1', borderRadius: '4px 4px 0 0', background: '#fff' }}
+        onPaste={onPaste}
+      >
+        <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: '100%', minWidth: WIDTHS.reduce((a, b) => a + b, 0) + 30 }}>
           <colgroup>
-            {COLS.map(c => <col key={c.key} style={{ width: c.w }} />)}
-            <col style={{ width: 68 }} />
-            <col style={{ width: 34 }} />
+            {WIDTHS.map((w, i) => <col key={i} style={{ width: w }} />)}
+            <col style={{ width: 28 }} />
           </colgroup>
           <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
             <tr>
-              {COLS.map(c => <th key={c.key} style={S.th}>{c.label}</th>)}
-              <th style={{ ...S.th, textAlign: 'center' }}>處理完成</th>
-              <th style={{ ...S.th, padding: '6px 4px' }} />
+              {LABELS.map(l => <th key={l} style={TH}>{l}</th>)}
+              <th style={{ ...TH, padding: '5px 2px' }} />
             </tr>
           </thead>
           <tbody>
-            {/* 新增草稿列（僅待處理分頁） */}
-            {tab === 'pending' && (
-              <tr style={{ background: '#eff6ff' }}>
-                {COLS.map(c => (
-                  <td key={c.key} style={S.td}>
-                    <input
-                      type={c.type}
-                      value={draft[c.key]}
-                      placeholder={c.label}
-                      onChange={e => setDraft(p => ({ ...p, [c.key]: e.target.value }))}
-                      onKeyDown={e => draftKey(c.key, e)}
-                      style={S.inp('#eff6ff')}
-                    />
-                  </td>
-                ))}
-                <td style={{ ...S.td, textAlign: 'center', padding: '4px 6px' }}>
-                  <button style={S.btn('#2563eb')} onClick={saveDraft}>+ 儲存</button>
-                </td>
-                <td style={S.td} />
-              </tr>
-            )}
-
-            {/* 資料列 */}
-            {rows.map(record => {
-              const local = localRows[record.id] || record
-              const isPending = !record.completed
-              return (
-                <tr key={record.id} style={{ background: isPending ? '#fff' : '#f8fafc' }}>
-                  {COLS.map(c => (
-                    <td key={c.key} style={S.td}>
-                      {isPending ? (
-                        <input
-                          type={c.type}
-                          value={local[c.key] ?? ''}
-                          onChange={e => cellChange(record.id, c.key, e.target.value)}
-                          onBlur={() => cellBlur(record.id)}
-                          style={S.inp('#fff')}
-                        />
-                      ) : (
-                        <span style={{ display: 'block', padding: '5px 7px', fontSize: '13px', color: '#64748b' }}>
-                          {record[c.key] || ''}
-                        </span>
-                      )}
+            {rows.map((row, r) => (
+              <tr key={row._k}>
+                {KEYS.map((key, c) => {
+                  const isSel = tab === 'pending' && sel[0] === r && sel[1] === c
+                  const isDoneCol = c === DONE_C
+                  const isV = isDoneCol && (row[key] || '').trim().toUpperCase() === 'V'
+                  return (
+                    <td key={key} style={{
+                      ...tdBase,
+                      background: isSel ? '#dbeafe' : isDoneCol ? '#f0fdf4' : tab === 'done' ? '#f8fafc' : '#fff',
+                      outline: isSel ? '2px solid #2563eb' : 'none',
+                      outlineOffset: '-2px',
+                    }}>
+                      <input
+                        ref={el => { cellRefs.current[`${r}-${c}`] = el }}
+                        value={row[key] || ''}
+                        readOnly={tab === 'done'}
+                        onChange={e => tab === 'pending' && onChange(r, c, e.target.value)}
+                        onFocus={() => setSel([r, c])}
+                        onKeyDown={e => onKeyDown(r, c, e)}
+                        style={{
+                          ...INP,
+                          textAlign: isDoneCol ? 'center' : 'left',
+                          fontWeight: isV ? '700' : 'normal',
+                          color: isV ? '#16a34a' : tab === 'done' ? '#64748b' : '#111',
+                          fontSize: isDoneCol ? '16px' : '13px',
+                          readOnly: tab === 'done',
+                        }}
+                      />
                     </td>
-                  ))}
-                  <td style={{ ...S.td, textAlign: 'center', padding: '3px 6px' }}>
-                    {isPending ? (
-                      <button style={S.btn('#16a34a')} onClick={() => markDone(record.id)}>完成</button>
-                    ) : (
-                      <button style={{ ...S.btn('#64748b'), background: 'transparent', color: '#64748b' }} onClick={() => undoDone(record.id)}>撤回</button>
-                    )}
-                  </td>
-                  <td style={{ ...S.td, textAlign: 'center', padding: '3px' }}>
-                    {(isAdmin || record.creator_name === currentUser) && (
-                      <button onClick={() => del(record.id)} title="刪除" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#ef4444', display: 'flex', alignItems: 'center' }}>
-                        <Trash2 size={13} />
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              )
-            })}
-
-            {rows.length === 0 && tab === 'done' && (
-              <tr>
-                <td colSpan={COLS.length + 2} style={{ textAlign: 'center', padding: '40px', color: '#94a3b8', fontSize: '14px' }}>
-                  尚無已處理紀錄
+                  )
+                })}
+                <td style={{ ...tdBase, textAlign: 'center', padding: '2px' }}>
+                  {tab === 'done'
+                    ? <button onClick={() => undoDone(row)} title="撤回" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', fontSize: '16px', lineHeight: 1, padding: '1px 3px' }}>↩</button>
+                    : hasData(row) && (isAdmin || !row._id || row.creator_name === currentUser)
+                      ? <button onClick={() => del(row, false)} title="刪除" style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#e2e8f0', fontSize: '16px', lineHeight: 1, padding: '1px 3px' }}>×</button>
+                      : null
+                  }
                 </td>
               </tr>
-            )}
+            ))}
           </tbody>
         </table>
       </div>
 
-      {/* Excel 風格底部分頁 */}
+      {/* Excel 式底部分頁 */}
       <div style={{ display: 'flex', alignItems: 'flex-end', borderTop: '2px solid #cbd5e1', background: '#f8fafc', flexShrink: 0 }}>
-        <button style={S.tab(tab === 'pending')} onClick={() => setTab('pending')}>
+        <button style={tabSt(tab === 'pending')} onClick={() => { setTab('pending'); setSel([0, 0]) }}>
           待處理{pendingCount > 0 ? ` (${pendingCount})` : ''}
         </button>
-        <button style={S.tab(tab === 'done')} onClick={() => setTab('done')}>
-          已處理{done.length > 0 ? ` (${done.length})` : ''}
+        <button style={tabSt(tab === 'done')} onClick={() => { setTab('done'); setSel([0, 0]) }}>
+          已處理{doneCount > 0 ? ` (${doneCount})` : ''}
         </button>
       </div>
     </div>
