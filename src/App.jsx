@@ -44,6 +44,7 @@ import { migrateToHtml, ContentEditableEditor } from './lib/richText'
 
 const DEFAULT_TABS = [
   { id: 'all', label: '總覽', icon: LayoutDashboard },
+  { id: 'reported', label: '報告完成', icon: PackageCheck },
   { id: 'history', label: '歷史', icon: ClipboardCheck },
 ]
 
@@ -582,7 +583,8 @@ function App() {
     return [
       DEFAULT_TABS[0],
       ...handoffCategories,
-      DEFAULT_TABS[1]
+      DEFAULT_TABS[1],
+      DEFAULT_TABS[2]
     ]
   }, [categories])
 
@@ -698,7 +700,7 @@ function App() {
           creatorName={name}
           defaultCategory={modalCategory}
           onTaskAdded={fetchTasks}
-          dynamicHandoffCategories={dynamicTabs.filter(t => t.id !== 'all' && t.id !== 'history').map(t => t.id)}
+          dynamicHandoffCategories={dynamicTabs.filter(t => t.id !== 'all' && t.id !== 'history' && t.id !== 'reported').map(t => t.id)}
           editTask={editingTask}
         />
       )}
@@ -758,7 +760,8 @@ function GeneralDashboard({
       handoff: openTasks.filter((task) => task.category_name === '交接').length,
       memo: unreadMemos.length, // 個人未讀數量
       todo: openTasks.filter((task) => task.category_name === '待辦').length,
-      special: openTasks.filter((task) => task.category_name === '特殊項目').length,
+      special: openTasks.filter((task) => task.category_name === '特殊項目' && !task.reported_done).length,
+      reported: tasks.filter((task) => task.category_name === '特殊項目' && task.status === 0 && task.reported_done).length,
       done: tasks.filter((task) => task.status !== 0).length,
       urgent: openTasks.filter((task) => task.priority).length,
     }
@@ -766,12 +769,13 @@ function GeneralDashboard({
 
   // 動態計算未完成總數
   const totalOpenCount = useMemo(() => {
-    const activeCategoryIds = tabs.filter(t => t.id !== 'all' && t.id !== 'history').map(t => t.id)
-    return tasks.filter(task => 
-      task.status === 0 && 
+    const activeCategoryIds = tabs.filter(t => t.id !== 'all' && t.id !== 'history' && t.id !== 'reported').map(t => t.id)
+    return tasks.filter(task =>
+      task.status === 0 &&
       activeCategoryIds.includes(task.category_name) &&
       !(task.category_name === '備忘' && Array.isArray(task.archived_by) && task.archived_by.includes(name)) &&
-      !((task.category_name === '特殊項目' || task.category_name === '特殊檢驗') && Array.isArray(task.history) && task.history.some(h => h.action.includes('收集了檢體')))
+      !((task.category_name === '特殊項目' || task.category_name === '特殊檢驗') && Array.isArray(task.history) && task.history.some(h => h.action.includes('收集了檢體'))) &&
+      !(task.category_name === '特殊項目' && task.reported_done)
     ).length
   }, [tasks, tabs, name])
 
@@ -786,7 +790,11 @@ function GeneralDashboard({
         if (activeTab === 'all') {
           if (task.category_name === '備忘') return task.status === 0 && !isArchivedByMe && !isReadByMe
           if ((task.category_name === '特殊項目' || task.category_name === '特殊檢驗') && Array.isArray(task.history) && task.history.some(h => h.action.includes('收集了檢體'))) return false
+          if (task.category_name === '特殊項目' && task.reported_done) return false
           return task.status === 0 && !isArchivedByMe
+        }
+        if (activeTab === 'reported') {
+          return task.category_name === '特殊項目' && task.status === 0 && task.reported_done === true
         }
         if (activeTab === 'history') {
           if (task.category_name === '備忘') return isArchivedByMe
@@ -796,7 +804,7 @@ function GeneralDashboard({
           return task.category_name === '備忘' && task.status === 0 && !isArchivedByMe
         }
         if (activeTab === '特殊項目') {
-          return task.category_name === '特殊項目' && task.status === 0
+          return task.category_name === '特殊項目' && task.status === 0 && !task.reported_done
         }
         return task.status === 0 && task.category_name === activeTab
       })()
@@ -843,12 +851,15 @@ function GeneralDashboard({
               count = totalOpenCount
             } else if (tab.id === 'history') {
               count = 0 // 歷史不顯示數字
+            } else if (tab.id === 'reported') {
+              count = stats.reported
             } else {
               // 對於單一分類，計算未完成且未被個人歸檔/讀取的數量
-              count = tasks.filter(task => 
-                task.category_name === tab.id && 
+              count = tasks.filter(task =>
+                task.category_name === tab.id &&
                 task.status === 0 &&
-                !(task.category_name === '備忘' && Array.isArray(task.archived_by) && task.archived_by.includes(name))
+                !(task.category_name === '備忘' && Array.isArray(task.archived_by) && task.archived_by.includes(name)) &&
+                !(task.category_name === '特殊項目' && task.reported_done)
               ).length
             }
 
@@ -861,7 +872,7 @@ function GeneralDashboard({
               >
                 <Icon size={16} />
                 {tab.label}
-                {count > 0 && <span style={{ background: 'var(--red)', color: 'white', padding: '2px 6px', borderRadius: '10px', fontSize: '11px', marginLeft: '4px' }}>{count}</span>}
+                {count > 0 && <span style={{ background: tab.id === 'reported' ? '#16a34a' : 'var(--red)', color: 'white', padding: '2px 6px', borderRadius: '10px', fontSize: '11px', marginLeft: '4px' }}>{count}</span>}
               </button>
             )
           })}
@@ -1716,9 +1727,22 @@ function TaskRow({
                       收集檢體
                     </button>
                   )}
-                  <button 
-                    className="icon-text-button complete" 
-                    disabled={busy} 
+                  {task.category_name === '特殊項目' && !task.reported_done && (
+                    <button type="button" className="icon-text-button" style={{ background: 'var(--green, #16a34a)', color: '#fff' }} disabled={busy} onClick={() => onEdit({ reported_done: true, _log_only: '報告完成' })}>
+                      <PackageCheck size={18} />
+                      報告完成
+                    </button>
+                  )}
+                  {task.category_name === '特殊項目' && task.reported_done && (
+                    <button type="button" className="icon-text-button ghost" disabled={busy} onClick={() => onEdit({ reported_done: false, _log_only: '撤回報告完成' })}>
+                      <Undo2 size={18} />
+                      撤回報告
+                    </button>
+                  )}
+                  <button
+                    className="icon-text-button complete"
+                    disabled={busy || (task.category_name === '特殊項目' && !task.reported_done)}
+                    title={task.category_name === '特殊項目' && !task.reported_done ? '請先按「報告完成」' : undefined}
                     onClick={() => {
                       if (task.category_name === '備忘') {
                         const readers = Array.isArray(task.read_by) ? task.read_by : []
