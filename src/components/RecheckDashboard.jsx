@@ -312,16 +312,14 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                 <td style={{ ...tdBase, textAlign: 'center', padding: '3px 5px' }}>
                   {tab === 'pending' && hasData(row) && (
                     <button
-                      onMouseDown={e => e.preventDefault()}
-                      onClick={() => markDone(r)}
+                      onMouseDown={e => { e.preventDefault(); markDone(r) }}
                       title="標記完成，移至已處理"
                       style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
                     >完成</button>
                   )}
                   {tab === 'done' && (
                     <button
-                      onMouseDown={e => e.preventDefault()}
-                      onClick={() => undoDone(row)}
+                      onMouseDown={e => { e.preventDefault(); undoDone(row) }}
                       title="撤回到待處理"
                       style={{ background: 'none', border: '1px solid #cbd5e1', borderRadius: 4, padding: '2px 6px', fontSize: 12, color: '#94a3b8', cursor: 'pointer' }}
                     >撤回</button>
