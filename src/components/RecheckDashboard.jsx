@@ -282,16 +282,9 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 180px)', minHeight: 400 }}>
       <section className="work-header" style={{ marginBottom: 6 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <div>
-            <p className="eyebrow">複驗追蹤</p>
-            <h1>待處理 {pendingCount} 件</h1>
-          </div>
-          <button
-            type="button"
-            onClick={load}
-            style={{ padding: '6px 14px', fontSize: 13, border: '1px solid #cbd5e1', borderRadius: 6, background: '#fff', cursor: 'pointer' }}
-          >🔄 重新載入</button>
+        <div>
+          <p className="eyebrow">複驗追蹤</p>
+          <h1>待處理 {pendingCount} 件</h1>
         </div>
       </section>
 
@@ -300,9 +293,9 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         <span style={{ color: '#f59e0b' }}>●</span> 未儲存
         <span style={{ color: '#94a3b8' }}>↻</span> 儲存中
         <span style={{ color: '#16a34a' }}>✓</span> 已儲存
-        <span style={{ marginLeft: 12, color: loadState.status === 'error' ? '#dc2626' : loadState.status === 'loading' ? '#f59e0b' : '#16a34a' }}>
-          {loadState.msg}
-        </span>
+        {loadState.status === 'error' && (
+          <span style={{ marginLeft: 12, color: '#dc2626' }}>{loadState.msg}</span>
+        )}
       </div>
 
       <div
