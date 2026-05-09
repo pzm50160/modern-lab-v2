@@ -4,6 +4,7 @@ import Login from './components/Login'
 import AdminPanel from './components/AdminPanel'
 import TaskModal from './components/TaskModal'
 import LegacySpecimen from './components/LegacySpecimen'
+import RecheckDashboard from './components/RecheckDashboard'
 import {
   AlertCircle,
   Archive,
@@ -13,6 +14,7 @@ import {
   ClipboardList,
   Download,
   FileText,
+  FlaskConical,
   History,
   LayoutDashboard,
   LogOut,
@@ -651,6 +653,10 @@ function App() {
               <span className="chat-unread-badge">{unreadChatCount > 99 ? '99+' : unreadChatCount}</span>
             )}
           </button>
+          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('recheck')}>
+            <FlaskConical size={17} />
+            複驗
+          </button>
         </div>
 
         {module === 'general' ? (
@@ -681,6 +687,8 @@ function App() {
           />
         ) : module === 'chat' ? (
           <ChatBoard currentUser={name} session={session} onResetUnread={() => setUnreadChatCount(0)} />
+        ) : module === 'recheck' ? (
+          <RecheckDashboard currentUser={name} isAdmin={isAdmin} />
         ) : (
           <LegacySpecimen
             currentUser={name}
