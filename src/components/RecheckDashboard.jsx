@@ -377,7 +377,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
 
                 {/* 完成按鈕 */}
                 <td style={{ ...tdBase, textAlign: 'center', padding: '3px 5px' }}>
-                  {tab === 'pending' && hasData(row) && editable && (
+                  {tab === 'pending' && hasData(row) && (
                     <button
                       type="button"
                       onMouseDown={e => e.preventDefault()}
