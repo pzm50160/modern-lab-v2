@@ -1,6 +1,6 @@
-import React, { useState, useMemo, useEffect } from 'react'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
-import { Plus, Trash2, RefreshCw, FlaskConical } from 'lucide-react'
+import { Plus, Trash2, RefreshCw } from 'lucide-react'
 
 const COLS = [
   { key: 'date',          label: '送檢日期', type: 'date',  width: '110px' },
@@ -14,20 +14,26 @@ const COLS = [
   { key: 'note',          label: '備註',     type: 'text',  width: '140px' },
 ]
 
-const EMPTY_ROW = {
-  date: new Date().toISOString().slice(0, 10),
-  sender: '', vendor: '', specimen_id: '',
-  patient_name: '', test_item: '',
-  initial_value: '', recheck_value: '', note: '',
+const SHARED_KEYS = ['date', 'sender', 'vendor'] // 新增列時繼承這些欄位
+
+function emptyRow(inherit = {}) {
+  return {
+    date: new Date().toISOString().slice(0, 10),
+    sender: '', vendor: '', specimen_id: '',
+    patient_name: '', test_item: '',
+    initial_value: '', recheck_value: '', note: '',
+    ...inherit,
+  }
 }
 
 export default function RecheckDashboard({ currentUser, isAdmin }) {
-  const [records, setRecords]   = useState([])
-  const [tab, setTab]           = useState('pending')
-  const [loading, setLoading]   = useState(true)
-  const [newRow, setNewRow]     = useState({ ...EMPTY_ROW })
+  const [records, setRecords]     = useState([])
+  const [tab, setTab]             = useState('pending')
+  const [loading, setLoading]     = useState(true)
+  const [newRows, setNewRows]     = useState([emptyRow()])
   const [editingId, setEditingId] = useState(null)
-  const [editRow, setEditRow]   = useState({})
+  const [editRow, setEditRow]     = useState({})
+  const inputRefs = useRef({}) // { `${rowIdx}-${colKey}`: el }
 
   useEffect(() => { fetchRecords() }, [])
 
@@ -42,15 +48,56 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
     setLoading(false)
   }
 
-  async function addRecord() {
-    if (!newRow.specimen_id.trim() && !newRow.patient_name.trim()) return
-    const { error } = await supabase.from('recheck_records').insert([{
-      ...newRow,
-      completed: false,
-      creator_name: currentUser,
-    }])
+  function updateNewRow(rowIdx, key, value) {
+    setNewRows(prev => prev.map((r, i) => i === rowIdx ? { ...r, [key]: value } : r))
+  }
+
+  function addInputRow(afterIdx) {
+    const current = newRows[afterIdx]
+    const inherited = Object.fromEntries(SHARED_KEYS.map(k => [k, current[k]]))
+    const next = [...newRows.slice(0, afterIdx + 1), emptyRow(inherited), ...newRows.slice(afterIdx + 1)]
+    setNewRows(next)
+    // 下一個 tick 聚焦到新列的第一個文字欄
+    setTimeout(() => {
+      const firstTextCol = COLS.find(c => c.type === 'text')
+      const el = inputRefs.current[`${afterIdx + 1}-${firstTextCol?.key}`]
+      if (el) el.focus()
+    }, 30)
+  }
+
+  function removeInputRow(rowIdx) {
+    if (newRows.length === 1) return
+    setNewRows(prev => prev.filter((_, i) => i !== rowIdx))
+  }
+
+  function handleInputKeyDown(rowIdx, colKey, e) {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      if (colKey === 'test_item') {
+        // 在項目欄按 Enter → 新增一列
+        addInputRow(rowIdx)
+      } else {
+        // 其他欄按 Enter → 移到下一欄
+        const colIdx = COLS.findIndex(c => c.key === colKey)
+        const nextCol = COLS[colIdx + 1]
+        if (nextCol) {
+          const el = inputRefs.current[`${rowIdx}-${nextCol.key}`]
+          if (el) el.focus()
+        }
+      }
+    }
+    if (e.key === 'Backspace' && e.target.value === '' && colKey === COLS[0].key && newRows.length > 1) {
+      removeInputRow(rowIdx)
+    }
+  }
+
+  async function submitAllRows() {
+    const valid = newRows.filter(r => r.specimen_id.trim() || r.patient_name.trim())
+    if (!valid.length) return
+    const payload = valid.map(r => ({ ...r, completed: false, creator_name: currentUser }))
+    const { error } = await supabase.from('recheck_records').insert(payload)
     if (error) { alert(`新增失敗：${error.message}`); return }
-    setNewRow({ ...EMPTY_ROW })
+    setNewRows([emptyRow()])
     await fetchRecords()
   }
 
@@ -88,8 +135,20 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
 
   const pendingCount = records.filter(r => !r.completed).length
 
-  const cellStyle = { padding: '6px 8px', borderRight: '1px solid var(--border)', whiteSpace: 'nowrap', fontSize: '13px' }
-  const inputStyle = { width: '100%', border: 'none', background: 'transparent', fontSize: '13px', outline: 'none', padding: '0' }
+  const cellStyle = {
+    padding: '6px 8px',
+    borderRight: '1px solid var(--border)',
+    whiteSpace: 'nowrap',
+    fontSize: '13px',
+  }
+  const inputStyle = {
+    width: '100%',
+    border: 'none',
+    background: 'transparent',
+    fontSize: '13px',
+    outline: 'none',
+    padding: '0',
+  }
 
   return (
     <>
@@ -127,7 +186,7 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
           <thead>
             <tr style={{ background: 'var(--surface-soft)', borderBottom: '2px solid var(--border)' }}>
               {COLS.map(col => (
-                <th key={col.key} style={{ ...cellStyle, fontWeight: '600', width: col.width, minWidth: col.width, color: 'var(--text-muted)', fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                <th key={col.key} style={{ ...cellStyle, fontWeight: '600', width: col.width, minWidth: col.width, color: 'var(--text-muted)', fontSize: '12px', letterSpacing: '0.03em' }}>
                   {col.label}
                 </th>
               ))}
@@ -136,43 +195,68 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
             </tr>
           </thead>
           <tbody>
-            {/* 新增列 */}
-            {tab === 'pending' && (
-              <tr style={{ background: '#f0f9ff', borderBottom: '1px solid var(--border)' }}>
+            {/* 輸入列（多列） */}
+            {tab === 'pending' && newRows.map((row, rowIdx) => (
+              <tr key={rowIdx} style={{ background: '#f0f9ff', borderBottom: '1px solid var(--border)' }}>
                 {COLS.map(col => (
-                  <td key={col.key} style={{ ...cellStyle, padding: '4px 6px' }}>
+                  <td key={col.key} style={{ ...cellStyle, padding: '3px 5px' }}>
                     <input
+                      ref={el => { inputRefs.current[`${rowIdx}-${col.key}`] = el }}
                       type={col.type}
-                      value={newRow[col.key]}
-                      onChange={e => setNewRow(prev => ({ ...prev, [col.key]: e.target.value }))}
-                      onKeyDown={e => e.key === 'Enter' && addRecord()}
+                      value={row[col.key]}
+                      onChange={e => updateNewRow(rowIdx, col.key, e.target.value)}
+                      onKeyDown={e => handleInputKeyDown(rowIdx, col.key, e)}
                       style={{ ...inputStyle, background: 'white', border: '1px solid var(--border)', borderRadius: '4px', padding: '3px 6px' }}
                       placeholder={col.label}
                     />
                   </td>
                 ))}
-                <td style={{ ...cellStyle, textAlign: 'center', padding: '4px 6px' }}>
-                  <button
-                    className="icon-text-button primary"
-                    onClick={addRecord}
-                    style={{ padding: '3px 10px', fontSize: '12px', whiteSpace: 'nowrap' }}
-                  >
-                    <Plus size={13} />
-                    新增
-                  </button>
+                {/* 最後一列顯示送出按鈕，其餘顯示刪除列按鈕 */}
+                <td style={{ ...cellStyle, textAlign: 'center', padding: '3px 5px' }}>
+                  {rowIdx === newRows.length - 1 ? (
+                    <button
+                      className="icon-text-button primary"
+                      onClick={submitAllRows}
+                      style={{ padding: '3px 10px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                    >
+                      <Plus size={13} />
+                      新增
+                    </button>
+                  ) : (
+                    <button
+                      className="icon-button mini"
+                      onClick={() => removeInputRow(rowIdx)}
+                      title="移除此列"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      ✕
+                    </button>
+                  )}
                 </td>
-                <td />
+                <td style={{ padding: '3px' }}>
+                  {rowIdx === newRows.length - 1 && newRows.length === 1 ? null : (
+                    <button
+                      className="icon-button mini"
+                      onClick={() => addInputRow(rowIdx)}
+                      title="在此列下方新增一列"
+                      style={{ color: 'var(--blue)' }}
+                    >
+                      +
+                    </button>
+                  )}
+                </td>
               </tr>
-            )}
+            ))}
 
+            {/* 已儲存的資料列 */}
             {filtered.map(record => (
               <tr
                 key={record.id}
-                style={{ borderBottom: '1px solid var(--border)', background: record.completed ? 'var(--surface-soft)' : 'white', opacity: record.completed ? 0.65 : 1, cursor: 'default' }}
+                style={{ borderBottom: '1px solid var(--border)', background: record.completed ? 'var(--surface-soft)' : 'white', opacity: record.completed ? 0.65 : 1 }}
                 onDoubleClick={() => { setEditingId(record.id); setEditRow({ ...record }) }}
               >
                 {COLS.map(col => (
-                  <td key={col.key} style={{ ...cellStyle, maxWidth: col.width }}>
+                  <td key={col.key} style={{ ...cellStyle }}>
                     {editingId === record.id ? (
                       <input
                         type={col.type}
@@ -226,7 +310,7 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
       </div>
 
       <p style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' }}>
-        提示：雙擊任一列可編輯，按 Enter 儲存，Esc 取消
+        提示：在「項目」欄按 Enter 可快速新增一列（自動帶入日期、送檢單位、廠商）；雙擊已有資料可編輯
       </p>
     </>
   )
