@@ -687,12 +687,12 @@ function App() {
           />
         ) : module === 'chat' ? (
           <ChatBoard currentUser={name} session={session} onResetUnread={() => setUnreadChatCount(0)} />
-        ) : (
+        ) : module === 'specimen' ? (
           <LegacySpecimen
             currentUser={name}
             isAdmin={isAdmin}
           />
-        )}
+        ) : null}
 
         {/* RecheckDashboard 永遠保持掛載，只用 CSS 顯示/隱藏，避免切換模組時狀態消失 */}
         <div style={{ display: module === 'recheck' ? 'block' : 'none' }}>
