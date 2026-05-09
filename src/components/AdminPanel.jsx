@@ -15,7 +15,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { db } from './LegacySpecimen'
-import { collection, query, where, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore'
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, deleteDoc } from 'firebase/firestore'
 
 export default function AdminPanel({ onClose, session }) {
   const [users, setUsers] = useState([])
@@ -47,19 +47,29 @@ export default function AdminPanel({ onClose, session }) {
     return `${prefix} ${total} 筆（工作交接 ${c.handover || 0}、檢體收送 ${c.specimen || 0}、留言 ${c.messages || 0}、複驗 ${c.recheck || 0}、碳13 ${c.c13 || 0}）`
   }
 
+  // 取 Firebase 檢體收送中符合截止日期的已完成任務
+  async function fbSpecimenDocs(cutoffMs) {
+    const snap = await getDocs(query(collection(db, 'tasks'), where('status', 'in', [2, 3])))
+    return snap.docs.filter(d => {
+      const ts = d.data().completedAt?.toMillis() || d.data().createdAt?.toMillis() || 0
+      return ts < cutoffMs
+    })
+  }
+
   async function openCleanupModal() {
     if (!cleanupDate) return
     setPreviewLoading(true)
+    const cutoffMs = new Date(cleanupDate + 'T23:59:59').getTime()
     const iso = cutoffISO()
     const noop = { count: 0 }
-    const [rH, rS, rM, rR, rC] = await Promise.all([
-      cleanupTargets.handover ? supabase.from('tasks').select('*', { count: 'exact', head: true }).not('workflow', 'eq', 'specimen').in('status', [2, 3]).lt('completed_at', iso) : noop,
-      cleanupTargets.specimen ? supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('workflow', 'specimen').in('status', [2, 3]).lt('completed_at', iso) : noop,
+    const [rH, rM, rR, rC, fbDocs] = await Promise.all([
+      cleanupTargets.handover ? supabase.from('tasks').select('*', { count: 'exact', head: true }).in('status', [2, 3]).lt('completed_at', iso) : noop,
       cleanupTargets.messages ? supabase.from('messages').select('*', { count: 'exact', head: true }).lt('created_at', iso) : noop,
       cleanupTargets.recheck  ? supabase.from('recheck_records').select('*', { count: 'exact', head: true }).eq('completed', true).lt('created_at', iso) : noop,
       cleanupTargets.c13      ? supabase.from('c13_records').select('*', { count: 'exact', head: true }).eq('completed', true).lt('created_at', iso) : noop,
+      cleanupTargets.specimen ? fbSpecimenDocs(cutoffMs) : [],
     ])
-    setPreviewCounts({ handover: rH.count ?? 0, specimen: rS.count ?? 0, messages: rM.count ?? 0, recheck: rR.count ?? 0, c13: rC.count ?? 0 })
+    setPreviewCounts({ handover: rH.count ?? 0, specimen: fbDocs.length, messages: rM.count ?? 0, recheck: rR.count ?? 0, c13: rC.count ?? 0 })
     setPreviewLoading(false)
     setShowPwdModal(true)
   }
@@ -71,20 +81,27 @@ export default function AdminPanel({ onClose, session }) {
     if (!email) { alert('無法取得帳號 email，請重新登入'); setCleanupLoading(false); return }
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password: cleanupPwd })
     if (authError) { alert('密碼驗證失敗：' + authError.message); setCleanupLoading(false); return }
+    const cutoffMs = new Date(cleanupDate + 'T23:59:59').getTime()
     const iso = cutoffISO()
     const nd = { data: [] }
-    const [rH, rS, rM, rR, rC] = await Promise.all([
-      cleanupTargets.handover ? supabase.from('tasks').delete().not('workflow', 'eq', 'specimen').in('status', [2, 3]).lt('completed_at', iso).select('id') : nd,
-      cleanupTargets.specimen ? supabase.from('tasks').delete().eq('workflow', 'specimen').in('status', [2, 3]).lt('completed_at', iso).select('id') : nd,
+    const [rH, rM, rR, rC, fbDocs] = await Promise.all([
+      cleanupTargets.handover ? supabase.from('tasks').delete().in('status', [2, 3]).lt('completed_at', iso).select('id') : nd,
       cleanupTargets.messages ? supabase.from('messages').delete().lt('created_at', iso).select('id') : nd,
       cleanupTargets.recheck  ? supabase.from('recheck_records').delete().eq('completed', true).lt('created_at', iso).select('id') : nd,
       cleanupTargets.c13      ? supabase.from('c13_records').delete().eq('completed', true).lt('created_at', iso).select('id') : nd,
+      cleanupTargets.specimen ? fbSpecimenDocs(cutoffMs) : [],
     ])
-    const errs = [rH, rS, rM, rR, rC].map(r => r.error).filter(Boolean)
+    // 刪除 Firebase 檢體收送資料
+    let specimenDeleted = 0
+    if (cleanupTargets.specimen && fbDocs.length > 0) {
+      await Promise.all(fbDocs.map(d => deleteDoc(d.ref)))
+      specimenDeleted = fbDocs.length
+    }
+    const errs = [rH, rM, rR, rC].map(r => r.error).filter(Boolean)
     if (errs.length > 0) {
       alert('部分清除失敗：\n' + errs.map(e => e.message).join('\n'))
     } else {
-      const counts = { handover: rH.data?.length || 0, specimen: rS.data?.length || 0, messages: rM.data?.length || 0, recheck: rR.data?.length || 0, c13: rC.data?.length || 0 }
+      const counts = { handover: rH.data?.length || 0, specimen: specimenDeleted, messages: rM.data?.length || 0, recheck: rR.data?.length || 0, c13: rC.data?.length || 0 }
       setCleanupResult(fmtCounts(counts, '共刪除'))
       setTimeout(() => setCleanupResult(''), 10000)
     }
