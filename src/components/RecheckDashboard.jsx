@@ -53,10 +53,15 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
 
   // ── 載入 ─────────────────────────────────────────────────
   async function load() {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('recheck_records')
       .select('*')
       .order('date', { ascending: false })
+    if (error) {
+      console.error('複驗載入失敗:', error)
+      setTimeout(load, 2000)
+      return
+    }
     if (!data) return
     const p = data.filter(r => !r.completed).map(mkRow)
     const d = data.filter(r =>  r.completed).map(mkRow)
@@ -114,7 +119,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
           if (ci < NC) next[ri] = { ...next[ri], [KEYS[ci]]: val.trim() }
         })
         setStatus(next[ri]._k, 'saving')
-        saveRow(next[ri]).then(() => setStatus(next[ri]._k, 'saved'))
+        saveRow(next[ri]).then(ok => setStatus(next[ri]._k, ok ? 'saved' : 'dirty'))
       })
       if (hasData(next[next.length - 1])) next.push(mkRow())
       return next
@@ -140,19 +145,14 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     const k = row._k
     clearTimeout(timers.current[k])
     setStatus(k, 'saving')
-    saveRow(row).then(() => setStatus(k, 'saved'))
+    saveRow(row).then(ok => setStatus(k, ok ? 'saved' : 'dirty'))
   }
 
-  // ── 元件卸載時強制存所有未存的列 ────────────────────────
-  useEffect(() => {
-    return () => {
-      pendRef.current.forEach(row => {
-        if (hasData(row)) saveRow(row)
-      })
-    }
-  }, [])
+  // 註：原先在 unmount 時批次 saveRow 的清理會在頁面重新整理時
+  // 用 pendRef 的舊資料覆蓋剛剛 markDone 的列，導致完成被撤回。
+  // 因為已採用 onBlur 即存，且元件常駐 (display:none)，此 cleanup 已不需要。
 
-  // ── 存至 Supabase ────────────────────────────────────────
+  // ── 存至 Supabase（回傳 true 代表成功） ──────────────────
   async function saveRow(row) {
     const body = {
       date: row.date || null, sender: row.sender, vendor: row.vendor,
@@ -160,58 +160,78 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       test_item: row.test_item, initial_value: row.initial_value,
       recheck_value: row.recheck_value, note: row.note, completed: false,
     }
-    if (row._id) {
-      await supabase.from('recheck_records')
-        .update({ ...body, updated_at: new Date().toISOString() })
-        .eq('id', row._id)
-    } else {
-      const { data } = await supabase.from('recheck_records')
-        .insert([{ ...body, creator_name: currentUser }]).select()
-      if (data?.[0]) {
+    try {
+      if (row._id) {
+        const { error } = await supabase.from('recheck_records')
+          .update({ ...body, updated_at: new Date().toISOString() })
+          .eq('id', row._id)
+        if (error) { console.error('複驗儲存失敗:', error); return false }
+      } else {
+        const { data, error } = await supabase.from('recheck_records')
+          .insert([{ ...body, creator_name: currentUser }]).select()
+        if (error || !data?.[0]) { console.error('複驗新增失敗:', error); return false }
         const newId = data[0].id
         setPending(prev => prev.map(r => r._k === row._k ? { ...r, _id: newId } : r))
       }
+      return true
+    } catch (e) {
+      console.error('複驗存檔例外:', e)
+      return false
     }
   }
 
   // ── 標記完成（按鈕點擊） ─────────────────────────────────
   async function markDone(r) {
     const row = pendRef.current[r]
-    if (!row || !hasData(row)) return
+    if (!row || !hasData(row)) {
+      console.warn('markDone: 無資料或找不到列', r, row)
+      return
+    }
     clearTimeout(timers.current[row._k])
 
-    let id = row._id
-    if (!id) {
-      const { data } = await supabase.from('recheck_records').insert([{
-        date: row.date || null, sender: row.sender, vendor: row.vendor,
-        specimen_id: row.specimen_id, patient_name: row.patient_name,
-        test_item: row.test_item, initial_value: row.initial_value,
-        recheck_value: row.recheck_value, note: row.note,
-        completed: false, creator_name: currentUser,
-      }]).select()
-      if (!data?.[0]) return
-      id = data[0].id
+    try {
+      let id = row._id
+      if (!id) {
+        const { data, error } = await supabase.from('recheck_records').insert([{
+          date: row.date || null, sender: row.sender, vendor: row.vendor,
+          specimen_id: row.specimen_id, patient_name: row.patient_name,
+          test_item: row.test_item, initial_value: row.initial_value,
+          recheck_value: row.recheck_value, note: row.note,
+          completed: false, creator_name: currentUser,
+        }]).select()
+        if (error || !data?.[0]) { alert('標記完成失敗（新增）：' + (error?.message || '未知錯誤')); return }
+        id = data[0].id
+      }
+      const { error: upErr } = await supabase.from('recheck_records').update({ completed: true }).eq('id', id)
+      if (upErr) { alert('標記完成失敗（更新）：' + upErr.message); return }
+      const doneRow = { ...row, _id: id }
+      setDone(prev => [doneRow, ...prev])
+      setStatus(doneRow._k, 'saved')
+      setPending(prev => {
+        const next = prev.filter(x => x._k !== row._k)
+        return next.length === 0 || hasData(next[next.length - 1]) ? [...next, mkRow()] : next
+      })
+    } catch (e) {
+      alert('標記完成失敗：' + (e.message || e))
+      console.error(e)
     }
-    await supabase.from('recheck_records').update({ completed: true }).eq('id', id)
-    const doneRow = { ...row, _id: id }
-    setDone(prev => [doneRow, ...prev])
-    setStatus(doneRow._k, 'saved')
-    setPending(prev => {
-      const next = prev.filter((_, i) => i !== r)
-      return next.length === 0 || hasData(next[next.length - 1]) ? [...next, mkRow()] : next
-    })
   }
 
   // ── 撤回 ────────────────────────────────────────────────
   async function undoDone(row) {
     if (!row._id) return
-    await supabase.from('recheck_records').update({ completed: false }).eq('id', row._id)
-    setDone(prev => prev.filter(r => r._k !== row._k))
-    setPending(prev => {
-      const rest = prev.filter(r => hasData(r))
-      return [{ ...row }, ...rest, mkRow()]
-    })
-    setStatus(row._k, 'saved')
+    try {
+      const { error } = await supabase.from('recheck_records').update({ completed: false }).eq('id', row._id)
+      if (error) { alert('撤回失敗：' + error.message); return }
+      setDone(prev => prev.filter(r => r._k !== row._k))
+      setPending(prev => {
+        const rest = prev.filter(r => hasData(r))
+        return [{ ...row }, ...rest, mkRow()]
+      })
+      setStatus(row._k, 'saved')
+    } catch (e) {
+      alert('撤回失敗：' + (e.message || e))
+    }
   }
 
   // ── 刪除 ────────────────────────────────────────────────
@@ -312,14 +332,17 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                 <td style={{ ...tdBase, textAlign: 'center', padding: '3px 5px' }}>
                   {tab === 'pending' && hasData(row) && (
                     <button
-                      onMouseDown={e => { e.preventDefault(); markDone(r) }}
+                      type="button"
+                      onMouseDown={e => e.preventDefault()}
+                      onClick={() => markDone(r)}
                       title="標記完成，移至已處理"
-                      style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '2px 8px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap' }}
+                      style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', position: 'relative', zIndex: 1 }}
                     >完成</button>
                   )}
                   {tab === 'done' && (
                     <button
-                      onMouseDown={e => { e.preventDefault(); undoDone(row) }}
+                      type="button"
+                      onClick={() => undoDone(row)}
                       title="撤回到待處理"
                       style={{ background: 'none', border: '1px solid #cbd5e1', borderRadius: 4, padding: '2px 6px', fontSize: 12, color: '#94a3b8', cursor: 'pointer' }}
                     >撤回</button>
