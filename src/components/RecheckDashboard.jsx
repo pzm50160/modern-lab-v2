@@ -22,10 +22,21 @@ function mkRow(db = {}) {
     recheck_value:db.recheck_value || '',
     note:         db.note          || '',
     creator_name: db.creator_name  || '',
+    created_at:   db.created_at    || null,
   }
 }
 function hasData(row) {
   return KEYS.some(k => (row[k] || '').trim() !== '')
+}
+function fmtTime(s) {
+  if (!s) return ''
+  const d = new Date(s)
+  if (isNaN(d.getTime())) return ''
+  const m  = d.getMonth() + 1
+  const dd = d.getDate()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const mm = String(d.getMinutes()).padStart(2, '0')
+  return `${m}/${dd} ${hh}:${mm}`
 }
 
 
@@ -260,6 +271,11 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     }
   }
 
+  // 該列是否可編輯：尚未存檔（無 _id），或為自己建立，或為管理員
+  function canEdit(row) {
+    return !row._id || row.creator_name === currentUser || isAdmin
+  }
+
   // ── 渲染 ────────────────────────────────────────────────
   const rows         = tab === 'pending' ? pending : done
   const pendingCount = pending.filter(hasData).length
@@ -302,9 +318,10 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', border: '1px solid #cbd5e1', borderRadius: '4px 4px 0 0', background: '#fff' }}
         onPaste={onPaste}
       >
-        <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: '100%', minWidth: WIDTHS.reduce((a, b) => a + b, 0) + 120 }}>
+        <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: '100%', minWidth: WIDTHS.reduce((a, b) => a + b, 0) + 250 }}>
           <colgroup>
             {WIDTHS.map((w, i) => <col key={i} style={{ width: w }} />)}
+            <col style={{ width: 130 }} />{/* 建立者 */}
             <col style={{ width: 56 }} />{/* 完成 */}
             <col style={{ width: 28 }} />{/* 狀態 */}
             <col style={{ width: 24 }} />{/* 刪除 */}
@@ -312,40 +329,55 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
           <thead style={{ position: 'sticky', top: 0, zIndex: 2 }}>
             <tr>
               {LABELS.map(l => <th key={l} style={TH}>{l}</th>)}
+              <th style={TH}>建立者</th>
               <th style={{ ...TH, textAlign: 'center' }}>完成</th>
               <th style={{ ...TH, padding: '5px 4px', textAlign: 'center' }}></th>
               <th style={{ ...TH, padding: '5px 2px' }} />
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, r) => (
+            {rows.map((row, r) => {
+              const editable = canEdit(row)
+              return (
               <tr key={row._k} style={{ background: tab === 'done' ? '#f8fafc' : '#fff' }}>
                 {KEYS.map((key, c) => {
                   const isSel = tab === 'pending' && sel[0] === r && sel[1] === c
+                  const ro = tab === 'done' || !editable
                   return (
                     <td key={key} style={{
                       ...tdBase,
-                      background: isSel ? '#dbeafe' : 'inherit',
+                      background: isSel ? '#dbeafe' : (!editable && row._id ? '#f8fafc' : 'inherit'),
                       outline: isSel ? '2px solid #2563eb' : 'none',
                       outlineOffset: '-2px',
                     }}>
                       <input
                         ref={el => { cellRefs.current[`${r}-${c}`] = el }}
                         value={row[key] || ''}
-                        readOnly={tab === 'done'}
-                        onChange={e => tab === 'pending' && onChange(r, c, e.target.value)}
+                        readOnly={ro}
+                        title={!editable && row._id ? `僅 ${row.creator_name} 或管理員可修改` : ''}
+                        onChange={e => !ro && onChange(r, c, e.target.value)}
                         onFocus={() => setSel([r, c])}
                         onKeyDown={e => onKeyDown(r, c, e)}
-                        onBlur={() => tab === 'pending' && onCellBlur(r)}
-                        style={{ ...INP, color: tab === 'done' ? '#64748b' : '#111' }}
+                        onBlur={() => !ro && onCellBlur(r)}
+                        style={{ ...INP, color: ro ? '#64748b' : '#111', cursor: ro ? 'not-allowed' : 'cell' }}
                       />
                     </td>
                   )
                 })}
 
+                {/* 建立者 / 時間 */}
+                <td style={{ ...tdBase, padding: '4px 6px', fontSize: 11.5, color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {row._id && (
+                    <>
+                      <div style={{ fontWeight: 600, color: '#475569' }}>{row.creator_name || '—'}</div>
+                      <div style={{ fontSize: 10.5 }}>{fmtTime(row.created_at)}</div>
+                    </>
+                  )}
+                </td>
+
                 {/* 完成按鈕 */}
                 <td style={{ ...tdBase, textAlign: 'center', padding: '3px 5px' }}>
-                  {tab === 'pending' && hasData(row) && (
+                  {tab === 'pending' && hasData(row) && editable && (
                     <button
                       type="button"
                       onMouseDown={e => e.preventDefault()}
@@ -354,7 +386,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                       style={{ background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, padding: '4px 10px', fontSize: 12, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', position: 'relative', zIndex: 1 }}
                     >完成</button>
                   )}
-                  {tab === 'done' && (
+                  {tab === 'done' && editable && (
                     <button
                       type="button"
                       onClick={() => undoDone(row)}
@@ -376,7 +408,8 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                   )}
                 </td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
