@@ -110,8 +110,8 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
           const ci = sc + dc
           if (ci < NC) next[ri] = { ...next[ri], [KEYS[ci]]: val.trim() }
         })
-        setStatus(next[ri]._k, 'dirty')
-        scheduleSave(next[ri]._k)
+        setStatus(next[ri]._k, 'saving')
+        saveRow(next[ri]).then(() => setStatus(next[ri]._k, 'saved'))
       })
       if (hasData(next[next.length - 1])) next.push(mkRow())
       return next
@@ -126,22 +126,28 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
       next[r] = { ...next[r], [key]: val }
       if (r === prev.length - 1 && hasData(next[r])) next.push(mkRow())
       setStatus(next[r]._k, 'dirty')
-      scheduleSave(next[r]._k)
       return next
     })
   }
 
-  // ── 排程存檔 ─────────────────────────────────────────────
-  function scheduleSave(k) {
+  // ── 離開儲存格時立即存檔 ─────────────────────────────────
+  function onCellBlur(r) {
+    const row = pendRef.current[r]
+    if (!row || !hasData(row)) return
+    const k = row._k
     clearTimeout(timers.current[k])
-    timers.current[k] = setTimeout(async () => {
-      const row = pendRef.current.find(r => r._k === k)
-      if (!row || !hasData(row)) return
-      setStatus(k, 'saving')
-      await saveRow(row)
-      setStatus(k, 'saved')
-    }, 700)
+    setStatus(k, 'saving')
+    saveRow(row).then(() => setStatus(k, 'saved'))
   }
+
+  // ── 元件卸載時強制存所有未存的列 ────────────────────────
+  useEffect(() => {
+    return () => {
+      pendRef.current.forEach(row => {
+        if (hasData(row)) saveRow(row)
+      })
+    }
+  }, [])
 
   // ── 存至 Supabase ────────────────────────────────────────
   async function saveRow(row) {
@@ -292,6 +298,7 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
                         onChange={e => tab === 'pending' && onChange(r, c, e.target.value)}
                         onFocus={() => setSel([r, c])}
                         onKeyDown={e => onKeyDown(r, c, e)}
+                        onBlur={() => tab === 'pending' && onCellBlur(r)}
                         style={{ ...INP, color: tab === 'done' ? '#64748b' : '#111' }}
                       />
                     </td>
