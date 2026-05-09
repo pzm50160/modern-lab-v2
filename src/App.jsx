@@ -177,6 +177,7 @@ function App() {
   const [module, setModule] = useState('general')
   const moduleRef = React.useRef('general')
   const [unreadChatCount, setUnreadChatCount] = useState(0)
+  const [recheckPendingCount, setRecheckPendingCount] = useState(0)
   const [activeTab, setActiveTab] = useState('all')
   const [query, setQuery] = useState('')
   const [searchStartDate, setSearchStartDate] = useState('')
@@ -653,9 +654,12 @@ function App() {
               <span className="chat-unread-badge">{unreadChatCount > 99 ? '99+' : unreadChatCount}</span>
             )}
           </button>
-          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('recheck')}>
+          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('recheck')} style={{ position: 'relative' }}>
             <FlaskConical size={17} />
             複驗
+            {recheckPendingCount > 0 && module !== 'recheck' && (
+              <span className="chat-unread-badge">{recheckPendingCount > 99 ? '99+' : recheckPendingCount}</span>
+            )}
           </button>
         </div>
 
@@ -696,7 +700,7 @@ function App() {
 
         {/* RecheckDashboard 永遠保持掛載，只用 CSS 顯示/隱藏，避免切換模組時狀態消失 */}
         <div style={{ display: module === 'recheck' ? 'block' : 'none' }}>
-          <RecheckDashboard currentUser={name} isAdmin={isAdmin} />
+          <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} />
         </div>
       </main>
 

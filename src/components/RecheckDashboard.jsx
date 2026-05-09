@@ -29,7 +29,7 @@ function hasData(row) {
 }
 
 // ── 主元件 ─────────────────────────────────────────────────
-export default function RecheckDashboard({ currentUser, isAdmin }) {
+export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountChange }) {
   const [tab, setTab]         = useState('pending')
   const [pending, setPending] = useState([mkRow()])
   const [done, setDone]       = useState([])
@@ -43,6 +43,9 @@ export default function RecheckDashboard({ currentUser, isAdmin }) {
 
   useEffect(() => { pendRef.current = pending }, [pending])
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    if (onPendingCountChange) onPendingCountChange(pending.filter(hasData).length)
+  }, [pending])
 
   function setStatus(k, s) {
     setRowStatus(prev => ({ ...prev, [k]: s }))
