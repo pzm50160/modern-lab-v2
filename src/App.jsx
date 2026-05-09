@@ -2095,6 +2095,7 @@ function ChatBoard({ currentUser, session, onResetUnread }) {
   const [inputMsg, setInputMsg] = useState('')
   const [loading, setLoading] = useState(true)
   const messagesEndRef = React.useRef(null)
+  const messagesAreaRef = React.useRef(null)
   const lastReadRef = React.useRef(null) // 進入時的已讀時間戳，用於顯示分隔線
   const hasMarkedRead = React.useRef(false)
 
@@ -2153,7 +2154,8 @@ function ChatBoard({ currentUser, session, onResetUnread }) {
   }
 
   function scrollToBottom() {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const area = messagesAreaRef.current
+    if (area) area.scrollTop = area.scrollHeight
   }
 
   async function handleSend(e) {
@@ -2201,7 +2203,7 @@ function ChatBoard({ currentUser, session, onResetUnread }) {
         </div>
       </section>
 
-      <div className="chat-messages-area">
+      <div className="chat-messages-area" ref={messagesAreaRef}>
         {loading ? (
           <div style={{ padding: '20px', textAlign: 'center', color: 'var(--text-muted)' }}>載入中...</div>
         ) : messages.length === 0 ? (

@@ -34,27 +34,31 @@ export default function AdminPanel({ onClose, session }) {
     if (!cleanupDate || !cleanupPwd) return
     setCleanupLoading(true)
     const email = session?.user?.email
+    if (!email) { alert('無法取得帳號 email，請重新登入'); setCleanupLoading(false); return }
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password: cleanupPwd })
     if (authError) {
-      alert('密碼錯誤，清除取消')
+      alert('密碼驗證失敗：' + authError.message)
       setCleanupLoading(false)
       return
     }
-    const cutoff = new Date(cleanupDate)
-    cutoff.setHours(23, 59, 59, 999)
+    // 截止時間：選定日期當天的最後一刻（本地時間）
+    const cutoff = new Date(cleanupDate + 'T23:59:59')
     const iso = cutoff.toISOString()
-    const results = await Promise.all([
-      supabase.from('tasks').delete().eq('status', 2).not('completed_at', 'is', null).lt('completed_at', iso),
-      supabase.from('messages').delete().lt('created_at', iso),
-      supabase.from('recheck_records').delete().eq('completed', true).lt('created_at', iso),
-      supabase.from('c13_records').delete().eq('completed', true).lt('created_at', iso),
+    const [rTasks, rMsg, rRecheck, rC13] = await Promise.all([
+      supabase.from('tasks').delete().in('status', [2, 3]).lt('completed_at', iso).select('id'),
+      supabase.from('messages').delete().lt('created_at', iso).select('id'),
+      supabase.from('recheck_records').delete().eq('completed', true).lt('created_at', iso).select('id'),
+      supabase.from('c13_records').delete().eq('completed', true).lt('created_at', iso).select('id'),
     ])
-    const errors = results.map(r => r.error).filter(Boolean)
-    if (errors.length > 0) {
-      alert('部分清除失敗：' + errors.map(e => e.message).join('；'))
+    const errs = [rTasks, rMsg, rRecheck, rC13].map(r => r.error).filter(Boolean)
+    if (errs.length > 0) {
+      alert('部分清除失敗：\n' + errs.map(e => e.message).join('\n'))
     } else {
-      setCleanupResult(`已清除 ${cleanupDate} 之前的舊資料`)
-      setTimeout(() => setCleanupResult(''), 6000)
+      const total = (rTasks.data?.length || 0) + (rMsg.data?.length || 0) + (rRecheck.data?.length || 0) + (rC13.data?.length || 0)
+      setCleanupResult(
+        `清除完成！共刪除 ${total} 筆（任務 ${rTasks.data?.length || 0}、留言 ${rMsg.data?.length || 0}、複驗 ${rRecheck.data?.length || 0}、碳13 ${rC13.data?.length || 0}）`
+      )
+      setTimeout(() => setCleanupResult(''), 8000)
     }
     setShowPwdModal(false)
     setCleanupPwd('')
