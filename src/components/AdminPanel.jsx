@@ -25,10 +25,44 @@ export default function AdminPanel({ onClose, session }) {
   const [message, setMessage] = useState('')
 
   const [cleanupDate, setCleanupDate] = useState('')
+  const [cleanupTargets, setCleanupTargets] = useState({ handover: true, specimen: true, messages: true, recheck: true, c13: true })
   const [showPwdModal, setShowPwdModal] = useState(false)
   const [cleanupPwd, setCleanupPwd] = useState('')
   const [cleanupLoading, setCleanupLoading] = useState(false)
+  const [previewCounts, setPreviewCounts] = useState(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
   const [cleanupResult, setCleanupResult] = useState('')
+
+  function toggleTarget(key) {
+    setCleanupTargets(prev => ({ ...prev, [key]: !prev[key] }))
+  }
+
+  function cutoffISO() {
+    return new Date(cleanupDate + 'T23:59:59').toISOString()
+  }
+
+  function fmtCounts(c, prefix) {
+    if (!c) return ''
+    const total = (c.handover || 0) + (c.specimen || 0) + (c.messages || 0) + (c.recheck || 0) + (c.c13 || 0)
+    return `${prefix} ${total} 筆（工作交接 ${c.handover || 0}、檢體收送 ${c.specimen || 0}、留言 ${c.messages || 0}、複驗 ${c.recheck || 0}、碳13 ${c.c13 || 0}）`
+  }
+
+  async function openCleanupModal() {
+    if (!cleanupDate) return
+    setPreviewLoading(true)
+    const iso = cutoffISO()
+    const noop = { count: 0 }
+    const [rH, rS, rM, rR, rC] = await Promise.all([
+      cleanupTargets.handover ? supabase.from('tasks').select('*', { count: 'exact', head: true }).not('workflow', 'eq', 'specimen').in('status', [2, 3]).lt('completed_at', iso) : noop,
+      cleanupTargets.specimen ? supabase.from('tasks').select('*', { count: 'exact', head: true }).eq('workflow', 'specimen').in('status', [2, 3]).lt('completed_at', iso) : noop,
+      cleanupTargets.messages ? supabase.from('messages').select('*', { count: 'exact', head: true }).lt('created_at', iso) : noop,
+      cleanupTargets.recheck  ? supabase.from('recheck_records').select('*', { count: 'exact', head: true }).eq('completed', true).lt('created_at', iso) : noop,
+      cleanupTargets.c13      ? supabase.from('c13_records').select('*', { count: 'exact', head: true }).eq('completed', true).lt('created_at', iso) : noop,
+    ])
+    setPreviewCounts({ handover: rH.count ?? 0, specimen: rS.count ?? 0, messages: rM.count ?? 0, recheck: rR.count ?? 0, c13: rC.count ?? 0 })
+    setPreviewLoading(false)
+    setShowPwdModal(true)
+  }
 
   async function handleCleanup() {
     if (!cleanupDate || !cleanupPwd) return
@@ -36,29 +70,23 @@ export default function AdminPanel({ onClose, session }) {
     const email = session?.user?.email
     if (!email) { alert('無法取得帳號 email，請重新登入'); setCleanupLoading(false); return }
     const { error: authError } = await supabase.auth.signInWithPassword({ email, password: cleanupPwd })
-    if (authError) {
-      alert('密碼驗證失敗：' + authError.message)
-      setCleanupLoading(false)
-      return
-    }
-    // 截止時間：選定日期當天的最後一刻（本地時間）
-    const cutoff = new Date(cleanupDate + 'T23:59:59')
-    const iso = cutoff.toISOString()
-    const [rTasks, rMsg, rRecheck, rC13] = await Promise.all([
-      supabase.from('tasks').delete().in('status', [2, 3]).lt('completed_at', iso).select('id'),
-      supabase.from('messages').delete().lt('created_at', iso).select('id'),
-      supabase.from('recheck_records').delete().eq('completed', true).lt('created_at', iso).select('id'),
-      supabase.from('c13_records').delete().eq('completed', true).lt('created_at', iso).select('id'),
+    if (authError) { alert('密碼驗證失敗：' + authError.message); setCleanupLoading(false); return }
+    const iso = cutoffISO()
+    const nd = { data: [] }
+    const [rH, rS, rM, rR, rC] = await Promise.all([
+      cleanupTargets.handover ? supabase.from('tasks').delete().not('workflow', 'eq', 'specimen').in('status', [2, 3]).lt('completed_at', iso).select('id') : nd,
+      cleanupTargets.specimen ? supabase.from('tasks').delete().eq('workflow', 'specimen').in('status', [2, 3]).lt('completed_at', iso).select('id') : nd,
+      cleanupTargets.messages ? supabase.from('messages').delete().lt('created_at', iso).select('id') : nd,
+      cleanupTargets.recheck  ? supabase.from('recheck_records').delete().eq('completed', true).lt('created_at', iso).select('id') : nd,
+      cleanupTargets.c13      ? supabase.from('c13_records').delete().eq('completed', true).lt('created_at', iso).select('id') : nd,
     ])
-    const errs = [rTasks, rMsg, rRecheck, rC13].map(r => r.error).filter(Boolean)
+    const errs = [rH, rS, rM, rR, rC].map(r => r.error).filter(Boolean)
     if (errs.length > 0) {
       alert('部分清除失敗：\n' + errs.map(e => e.message).join('\n'))
     } else {
-      const total = (rTasks.data?.length || 0) + (rMsg.data?.length || 0) + (rRecheck.data?.length || 0) + (rC13.data?.length || 0)
-      setCleanupResult(
-        `清除完成！共刪除 ${total} 筆（任務 ${rTasks.data?.length || 0}、留言 ${rMsg.data?.length || 0}、複驗 ${rRecheck.data?.length || 0}、碳13 ${rC13.data?.length || 0}）`
-      )
-      setTimeout(() => setCleanupResult(''), 8000)
+      const counts = { handover: rH.data?.length || 0, specimen: rS.data?.length || 0, messages: rM.data?.length || 0, recheck: rR.data?.length || 0, c13: rC.data?.length || 0 }
+      setCleanupResult(fmtCounts(counts, '共刪除'))
+      setTimeout(() => setCleanupResult(''), 10000)
     }
     setShowPwdModal(false)
     setCleanupPwd('')
@@ -359,32 +387,32 @@ export default function AdminPanel({ onClose, session }) {
             <Trash2 size={20} />
             <h2>清除舊資料</h2>
           </div>
-          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 14 }}>
-              清除以下分頁中，所選日期（含）之前的舊資料：
-            </p>
-            <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: 'var(--text-muted)', lineHeight: 2 }}>
-              <li>工作交接 → 歷史</li>
-              <li>檢體收送 → 歷史搜尋</li>
-              <li>留言板</li>
-              <li>複驗 → 已處理</li>
-              <li>碳13報告 → 已處理</li>
-            </ul>
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <label style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap' }}>清除此日期之前：</label>
-              <input
-                type="date"
-                className="field"
-                style={{ width: 160 }}
-                value={cleanupDate}
-                onChange={e => setCleanupDate(e.target.value)}
-              />
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap' }}>清除此日期（含）之前：</label>
+              <input type="date" className="field" style={{ width: 160 }} value={cleanupDate} onChange={e => { setCleanupDate(e.target.value); setPreviewCounts(null) }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {[
+                { key: 'handover', label: '工作交接 → 歷史' },
+                { key: 'specimen', label: '檢體收送 → 歷史搜尋' },
+                { key: 'messages', label: '留言板' },
+                { key: 'recheck',  label: '複驗 → 已處理' },
+                { key: 'c13',      label: '碳13報告 → 已處理' },
+              ].map(({ key, label }) => (
+                <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', userSelect: 'none' }}>
+                  <input type="checkbox" checked={cleanupTargets[key]} onChange={() => { toggleTarget(key); setPreviewCounts(null) }} style={{ width: 16, height: 16, cursor: 'pointer' }} />
+                  {label}
+                </label>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
               <button
                 className="icon-text-button danger"
-                onClick={() => setShowPwdModal(true)}
-                disabled={!cleanupDate}
+                onClick={openCleanupModal}
+                disabled={!cleanupDate || previewLoading || !Object.values(cleanupTargets).some(Boolean)}
               >
-                <Trash2 size={16} />
+                {previewLoading ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
                 清除
               </button>
             </div>
@@ -400,11 +428,14 @@ export default function AdminPanel({ onClose, session }) {
 
       {showPwdModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 340, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 380, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', display: 'flex', flexDirection: 'column', gap: 16 }}>
             <h3 style={{ margin: 0, fontSize: 17, color: '#dc2626' }}>確認清除</h3>
+            <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '12px 16px', fontSize: 14, color: '#991b1b' }}>
+              需刪除 {fmtCounts(previewCounts, '')}
+            </div>
             <p style={{ margin: 0, fontSize: 14, color: '#475569', lineHeight: 1.6 }}>
-              將永久刪除 <strong>{cleanupDate}</strong> 之前的舊資料，此動作無法復原。<br />
-              請輸入您的管理員密碼確認：
+              將永久刪除 <strong>{cleanupDate}</strong>（含）之前的資料，此動作無法復原。<br />
+              請輸入管理員密碼確認：
             </p>
             <input
               type="password"
@@ -416,9 +447,7 @@ export default function AdminPanel({ onClose, session }) {
               autoFocus
             />
             <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-              <button className="icon-text-button ghost" onClick={() => { setShowPwdModal(false); setCleanupPwd('') }} disabled={cleanupLoading}>
-                取消
-              </button>
+              <button className="icon-text-button ghost" onClick={() => { setShowPwdModal(false); setCleanupPwd('') }} disabled={cleanupLoading}>取消</button>
               <button className="icon-text-button danger" onClick={handleCleanup} disabled={!cleanupPwd || cleanupLoading}>
                 {cleanupLoading ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
                 確認清除
