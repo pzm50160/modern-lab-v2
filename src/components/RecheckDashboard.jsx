@@ -238,7 +238,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       setDone(prev => prev.filter(r => r._k !== row._k))
       setPending(prev => {
         const rest = prev.filter(r => hasData(r))
-        return [{ ...row }, ...rest, mkRow()]
+        return [...rest, { ...row }, mkRow()]
       })
       setStatus(row._k, 'saved')
     } catch (e) {

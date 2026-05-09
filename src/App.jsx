@@ -178,7 +178,14 @@ function App() {
   const moduleRef = React.useRef('general')
   const [unreadChatCount, setUnreadChatCount] = useState(0)
   const [recheckPendingCount, setRecheckPendingCount] = useState(0)
-  const [recheckSeenCount, setRecheckSeenCount] = useState(0)
+  const [recheckSeenCount, setRecheckSeenCountState] = useState(() => {
+    const v = parseInt(localStorage.getItem('recheckSeenCount') || '0', 10)
+    return isNaN(v) ? 0 : v
+  })
+  const setRecheckSeenCount = (n) => {
+    setRecheckSeenCountState(n)
+    localStorage.setItem('recheckSeenCount', String(n))
+  }
   const [activeTab, setActiveTab] = useState('all')
   const [query, setQuery] = useState('')
   const [searchStartDate, setSearchStartDate] = useState('')
