@@ -7,22 +7,12 @@ const KEYS   = ['date','sender','vendor','specimen_id','patient_name','test_item
 const WIDTHS = [110, 90, 90, 85, 75, 75, 72, 72, 130]
 const NC = KEYS.length
 
-// 把 DB 拿回的 YYYY-MM-DD 顯示成短格式 (今年 → M/D，往年 → YYYY/M/D)
-function displayDate(s) {
-  if (!s) return ''
-  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (!m) return s
-  const [, y, mo, d] = m
-  const thisYear = String(new Date().getFullYear())
-  return y === thisYear ? `${+mo}/${+d}` : `${y}/${+mo}/${+d}`
-}
-
 let _uid = 0
 function mkRow(db = {}) {
   return {
     _k:           ++_uid,
     _id:          db.id            || null,
-    date:         displayDate(db.date) || '',
+    date:         db.date          || '',
     sender:       db.sender        || '',
     vendor:       db.vendor        || '',
     specimen_id:  db.specimen_id   || '',
@@ -38,26 +28,6 @@ function hasData(row) {
   return KEYS.some(k => (row[k] || '').trim() !== '')
 }
 
-// 把使用者輸入的日期 (5/7、5-7、2026/5/7、2026-5-7、20260507) 轉成 YYYY-MM-DD
-// 無法解析時回傳 null
-function normalizeDate(s) {
-  if (!s) return null
-  const t = String(s).trim()
-  if (!t) return null
-  // 純數字 8 碼 20260507
-  let m = t.match(/^(\d{4})(\d{2})(\d{2})$/)
-  if (m) return `${m[1]}-${m[2]}-${m[3]}`
-  // 帶年份 2026/5/7 或 2026-5-7
-  m = t.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/)
-  if (m) return `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
-  // 不帶年份 5/7 或 5-7（自動帶今年）
-  m = t.match(/^(\d{1,2})[/\-.](\d{1,2})$/)
-  if (m) {
-    const y = new Date().getFullYear()
-    return `${y}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`
-  }
-  return null
-}
 
 // ── 主元件 ─────────────────────────────────────────────────
 export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountChange }) {
@@ -197,7 +167,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   // ── 存至 Supabase（回傳 true 代表成功） ──────────────────
   async function saveRow(row) {
     const body = {
-      date: normalizeDate(row.date), sender: row.sender, vendor: row.vendor,
+      date: row.date || '', sender: row.sender, vendor: row.vendor,
       specimen_id: row.specimen_id, patient_name: row.patient_name,
       test_item: row.test_item, initial_value: row.initial_value,
       recheck_value: row.recheck_value, note: row.note, completed: false,
@@ -235,7 +205,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       let id = row._id
       if (!id) {
         const { data, error } = await supabase.from('recheck_records').insert([{
-          date: normalizeDate(row.date), sender: row.sender, vendor: row.vendor,
+          date: row.date || '', sender: row.sender, vendor: row.vendor,
           specimen_id: row.specimen_id, patient_name: row.patient_name,
           test_item: row.test_item, initial_value: row.initial_value,
           recheck_value: row.recheck_value, note: row.note,
