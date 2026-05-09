@@ -23,6 +23,7 @@ function mkRow(db = {}) {
     note:         db.note          || '',
     creator_name: db.creator_name  || '',
     created_at:   db.created_at    || null,
+    done_at:      db.done_at       || null,
   }
 }
 function hasData(row) {
@@ -68,6 +69,12 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   async function load() {
     setLoadState({ status: 'loading', msg: '載入中...', count: 0 })
     try {
+      const cutoff = new Date()
+      cutoff.setMonth(cutoff.getMonth() - 3)
+      await supabase.from('recheck_records').delete()
+        .eq('completed', true).not('done_at', 'is', null)
+        .lt('done_at', cutoff.toISOString())
+
       const { data, error } = await supabase
         .from('recheck_records')
         .select('*')
@@ -225,7 +232,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         if (error || !data?.[0]) { alert('標記完成失敗（新增）：' + (error?.message || '未知錯誤')); return }
         id = data[0].id
       }
-      const { error: upErr } = await supabase.from('recheck_records').update({ completed: true }).eq('id', id)
+      const { error: upErr } = await supabase.from('recheck_records').update({ completed: true, done_at: new Date().toISOString() }).eq('id', id)
       if (upErr) { alert('標記完成失敗（更新）：' + upErr.message); return }
       const doneRow = { ...row, _id: id }
       setDone(prev => [doneRow, ...prev])

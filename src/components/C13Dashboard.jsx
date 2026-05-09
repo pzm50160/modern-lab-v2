@@ -18,6 +18,7 @@ function mkRow(db = {}) {
     report:       db.report        || '',
     creator_name: db.creator_name  || '',
     created_at:   db.created_at    || null,
+    done_at:      db.done_at       || null,
   }
 }
 function hasData(row) {
@@ -59,6 +60,12 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
   async function load() {
     setLoadState({ status: 'loading', msg: '載入中...', count: 0 })
     try {
+      const cutoff = new Date()
+      cutoff.setMonth(cutoff.getMonth() - 3)
+      await supabase.from('c13_records').delete()
+        .eq('completed', true).not('done_at', 'is', null)
+        .lt('done_at', cutoff.toISOString())
+
       const { data, error } = await supabase
         .from('c13_records')
         .select('*')
@@ -198,7 +205,7 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
         if (error || !data?.[0]) { alert('標記完成失敗（新增）：' + (error?.message || '未知錯誤')); return }
         id = data[0].id
       }
-      const { error: upErr } = await supabase.from('c13_records').update({ completed: true }).eq('id', id)
+      const { error: upErr } = await supabase.from('c13_records').update({ completed: true, done_at: new Date().toISOString() }).eq('id', id)
       if (upErr) { alert('標記完成失敗（更新）：' + upErr.message); return }
       const doneRow = { ...row, _id: id }
       setDone(prev => [doneRow, ...prev])
