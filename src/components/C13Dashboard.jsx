@@ -60,12 +60,6 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
   async function load() {
     setLoadState({ status: 'loading', msg: '載入中...', count: 0 })
     try {
-      const cutoff = new Date()
-      cutoff.setMonth(cutoff.getMonth() - 3)
-      await supabase.from('c13_records').delete()
-        .eq('completed', true).not('done_at', 'is', null)
-        .lt('done_at', cutoff.toISOString())
-
       const { data, error } = await supabase
         .from('c13_records')
         .select('*')

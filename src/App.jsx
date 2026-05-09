@@ -226,16 +226,6 @@ function App() {
   }, [])
 
   useEffect(() => {
-    if (!session) return
-    const cutoff = new Date()
-    cutoff.setMonth(cutoff.getMonth() - 3)
-    supabase.from('tasks').delete()
-      .eq('status', STATUS_DONE)
-      .not('completed_at', 'is', null)
-      .lt('completed_at', cutoff.toISOString())
-  }, [session])
-
-  useEffect(() => {
     fetchCategories()
   }, [showAdmin])
 
@@ -637,7 +627,7 @@ function App() {
 
   return (
     <div className="app-shell">
-      {showAdmin && isAdmin && <AdminPanel onClose={() => setShowAdmin(false)} />}
+      {showAdmin && isAdmin && <AdminPanel onClose={() => setShowAdmin(false)} session={session} />}
       <nav className="nav-bar">
         <div>
           <div className="nav-logo">Modern Lab 工作台</div>
@@ -2112,10 +2102,6 @@ function ChatBoard({ currentUser, session, onResetUnread }) {
     // 讀取上次已讀時間
     const lastReadKey = `chat_lastRead_${session?.user?.id}`
     lastReadRef.current = localStorage.getItem(lastReadKey) || null
-
-    const cutoff = new Date()
-    cutoff.setMonth(cutoff.getMonth() - 3)
-    supabase.from('messages').delete().lt('created_at', cutoff.toISOString())
 
     fetchMessages()
 

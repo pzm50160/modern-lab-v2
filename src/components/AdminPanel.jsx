@@ -17,12 +17,49 @@ import {
 import { db } from './LegacySpecimen'
 import { collection, query, where, getDocs, addDoc, updateDoc, doc } from 'firebase/firestore'
 
-export default function AdminPanel({ onClose }) {
+export default function AdminPanel({ onClose, session }) {
   const [users, setUsers] = useState([])
   const [categories, setCategories] = useState([])
   const [newCategory, setNewCategory] = useState('')
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState('')
+
+  const [cleanupDate, setCleanupDate] = useState('')
+  const [showPwdModal, setShowPwdModal] = useState(false)
+  const [cleanupPwd, setCleanupPwd] = useState('')
+  const [cleanupLoading, setCleanupLoading] = useState(false)
+  const [cleanupResult, setCleanupResult] = useState('')
+
+  async function handleCleanup() {
+    if (!cleanupDate || !cleanupPwd) return
+    setCleanupLoading(true)
+    const email = session?.user?.email
+    const { error: authError } = await supabase.auth.signInWithPassword({ email, password: cleanupPwd })
+    if (authError) {
+      alert('密碼錯誤，清除取消')
+      setCleanupLoading(false)
+      return
+    }
+    const cutoff = new Date(cleanupDate)
+    cutoff.setHours(23, 59, 59, 999)
+    const iso = cutoff.toISOString()
+    const results = await Promise.all([
+      supabase.from('tasks').delete().eq('status', 2).not('completed_at', 'is', null).lt('completed_at', iso),
+      supabase.from('messages').delete().lt('created_at', iso),
+      supabase.from('recheck_records').delete().eq('completed', true).lt('created_at', iso),
+      supabase.from('c13_records').delete().eq('completed', true).lt('created_at', iso),
+    ])
+    const errors = results.map(r => r.error).filter(Boolean)
+    if (errors.length > 0) {
+      alert('部分清除失敗：' + errors.map(e => e.message).join('；'))
+    } else {
+      setCleanupResult(`已清除 ${cleanupDate} 之前的舊資料`)
+      setTimeout(() => setCleanupResult(''), 6000)
+    }
+    setShowPwdModal(false)
+    setCleanupPwd('')
+    setCleanupLoading(false)
+  }
 
   async function fetchUsers() {
     const { data, error } = await supabase
@@ -312,7 +349,80 @@ export default function AdminPanel({ onClose }) {
           <AlertTriangle size={18} />
           新增或刪除帳號仍需在 Supabase Auth 內處理，這裡負責調整員工顯示資料與角色。
         </div>
+
+        <section className="table-card">
+          <div className="table-title">
+            <Trash2 size={20} />
+            <h2>清除舊資料</h2>
+          </div>
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: 14 }}>
+              清除以下分頁中，所選日期（含）之前的舊資料：
+            </p>
+            <ul style={{ margin: 0, paddingLeft: 20, fontSize: 14, color: 'var(--text-muted)', lineHeight: 2 }}>
+              <li>工作交接 → 歷史</li>
+              <li>檢體收送 → 歷史搜尋</li>
+              <li>留言板</li>
+              <li>複驗 → 已處理</li>
+              <li>碳13報告 → 已處理</li>
+            </ul>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: 14, fontWeight: 600, whiteSpace: 'nowrap' }}>清除此日期之前：</label>
+              <input
+                type="date"
+                className="field"
+                style={{ width: 160 }}
+                value={cleanupDate}
+                onChange={e => setCleanupDate(e.target.value)}
+              />
+              <button
+                className="icon-text-button danger"
+                onClick={() => setShowPwdModal(true)}
+                disabled={!cleanupDate}
+              >
+                <Trash2 size={16} />
+                清除
+              </button>
+            </div>
+            {cleanupResult && (
+              <div className="notice success">
+                <CheckCircle size={18} />
+                {cleanupResult}
+              </div>
+            )}
+          </div>
+        </section>
       </div>
+
+      {showPwdModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ background: '#fff', borderRadius: 12, padding: 28, width: 340, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 17, color: '#dc2626' }}>確認清除</h3>
+            <p style={{ margin: 0, fontSize: 14, color: '#475569', lineHeight: 1.6 }}>
+              將永久刪除 <strong>{cleanupDate}</strong> 之前的舊資料，此動作無法復原。<br />
+              請輸入您的管理員密碼確認：
+            </p>
+            <input
+              type="password"
+              className="field"
+              placeholder="登入密碼"
+              value={cleanupPwd}
+              onChange={e => setCleanupPwd(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !cleanupLoading) handleCleanup() }}
+              autoFocus
+            />
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button className="icon-text-button ghost" onClick={() => { setShowPwdModal(false); setCleanupPwd('') }} disabled={cleanupLoading}>
+                取消
+              </button>
+              <button className="icon-text-button danger" onClick={handleCleanup} disabled={!cleanupPwd || cleanupLoading}>
+                {cleanupLoading ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />}
+                確認清除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
