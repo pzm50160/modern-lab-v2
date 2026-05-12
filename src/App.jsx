@@ -2046,8 +2046,8 @@ function PasswordModal({ isOpen, onClose, onUpdate }) {
   }
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '400px' }}>
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div style={{ background: '#fff', borderRadius: 12, width: '100%', maxWidth: 400, boxShadow: '0 8px 32px rgba(0,0,0,0.18)' }}>
         <div className="modal-header">
           <h2>修改登入密碼</h2>
           <button className="close-button" onClick={onClose}><X size={20} /></button>
