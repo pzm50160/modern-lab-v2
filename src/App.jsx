@@ -765,7 +765,7 @@ function GeneralDashboard({
   name,
   tasks,
   activeTab,
-  searchQuery,
+  query,
   searchStartDate,
   searchEndDate,
   taskError,
@@ -823,7 +823,7 @@ function GeneralDashboard({
   }, [tasks, tabs, name])
 
   const filteredTasks = useMemo(() => {
-    const normalizedQuery = searchQuery.trim().toLowerCase()
+    const normalizedQuery = query.trim().toLowerCase()
     return tasks.filter((task) => {
       const isClosed = task.status === STATUS_DONE || task.status === STATUS_VOIDED
       const isArchivedByMe = Array.isArray(task.archived_by) && task.archived_by.includes(name)
@@ -865,7 +865,7 @@ function GeneralDashboard({
       // 其次按時間排序（新的在前）
       return new Date(b.created_at) - new Date(a.created_at)
     })
-  }, [activeTab, searchQuery, tasks])
+  }, [activeTab, query, tasks])
 
   return (
     <>
