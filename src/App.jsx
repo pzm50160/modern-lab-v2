@@ -380,7 +380,7 @@ function App() {
 
   async function fetchTasks() {
     setTaskError('')
-    let query = supabase
+    let tasksQuery = supabase
       .from('tasks')
       .select('*')
       .order('created_at', { ascending: false })
@@ -388,12 +388,12 @@ function App() {
     if (searchStartDate || searchEndDate) {
       const start = searchStartDate ? `${searchStartDate}T00:00:00.000Z` : '1970-01-01T00:00:00.000Z'
       const end = searchEndDate ? `${searchEndDate}T23:59:59.999Z` : '9999-12-31T23:59:59.999Z'
-      
+
       // 確保「待辦/進行中 (status=0)」的任務不論日期都會被抓取，而歷史任務則根據日期範圍過濾
-      query = query.or(`status.eq.0,and(created_at.gte.${start},created_at.lte.${end}),and(completed_at.gte.${start},completed_at.lte.${end}),and(updated_at.gte.${start},updated_at.lte.${end})`)
+      tasksQuery = tasksQuery.or(`status.eq.0,and(created_at.gte.${start},created_at.lte.${end}),and(completed_at.gte.${start},completed_at.lte.${end}),and(updated_at.gte.${start},updated_at.lte.${end})`)
     }
 
-    const { data, error } = await query
+    const { data, error } = await tasksQuery
 
     if (error) {
       console.error('Error fetching tasks:', error)
