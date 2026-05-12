@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { supabase, supabaseAdmin } from '../lib/supabase'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -222,6 +222,55 @@ export default function AdminPanel({ onClose, session }) {
     }
   }
 
+  const [showCreateUserModal, setShowCreateUserModal] = useState(false)
+  const [newUserName, setNewUserName] = useState('')
+  const [newUserPassword, setNewUserPassword] = useState('')
+  const [createUserLoading, setCreateUserLoading] = useState(false)
+
+  function encodeAccountName(name) {
+    const bytes = new TextEncoder().encode(name.trim())
+    return btoa(String.fromCharCode(...bytes)).replace(/=/g, '')
+  }
+
+  async function handleCreateUser(e) {
+    e.preventDefault()
+    if (!supabaseAdmin) {
+      alert('尚未設定 VITE_SUPABASE_SERVICE_ROLE_KEY，無法從介面新增帳號。')
+      return
+    }
+    setCreateUserLoading(true)
+    try {
+      const name = newUserName.trim()
+      const encodedName = encodeAccountName(name)
+      const email = `${encodedName}@modern-lab.com`
+
+      const { data, error } = await supabaseAdmin.auth.admin.createUser({
+        email,
+        password: newUserPassword,
+        user_metadata: { display_name: name, role: 'staff' },
+        email_confirm: true,
+      })
+      if (error) throw error
+
+      await supabaseAdmin.from('profiles').insert({
+        id: data.user.id,
+        display_name: name,
+        role: 'staff',
+        account_id: encodedName,
+      })
+
+      setMessage(`帳號「${name}」已建立`)
+      setShowCreateUserModal(false)
+      setNewUserName('')
+      setNewUserPassword('')
+      await fetchUsers()
+      setTimeout(() => setMessage(''), 4000)
+    } catch (err) {
+      alert(`建立失敗：${err.message}`)
+    }
+    setCreateUserLoading(false)
+  }
+
   const [newCategoryType, setNewCategoryType] = useState('工作交接')
 
   async function handleAddCategory(e) {
@@ -282,6 +331,9 @@ export default function AdminPanel({ onClose, session }) {
           <div className="table-title">
             <Users size={20} />
             <h2>員工清單</h2>
+            <button className="icon-text-button primary" style={{ marginLeft: 'auto' }} onClick={() => setShowCreateUserModal(true)}>
+              <Plus size={16} /> 新增帳號
+            </button>
           </div>
 
           {loading ? (
@@ -442,6 +494,44 @@ export default function AdminPanel({ onClose, session }) {
           </div>
         </section>
       </div>
+
+      {showCreateUserModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <form onSubmit={handleCreateUser} style={{ background: '#fff', borderRadius: 12, padding: 28, width: 360, boxShadow: '0 8px 32px rgba(0,0,0,0.18)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 17 }}>新增員工帳號</h3>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>員工姓名</label>
+              <input
+                className="field"
+                placeholder="例：王小明"
+                value={newUserName}
+                onChange={e => setNewUserName(e.target.value)}
+                required
+                autoFocus
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>初始密碼</label>
+              <input
+                type="password"
+                className="field"
+                placeholder="至少 6 位"
+                value={newUserPassword}
+                onChange={e => setNewUserPassword(e.target.value)}
+                minLength={6}
+                required
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button type="button" className="icon-text-button ghost" onClick={() => { setShowCreateUserModal(false); setNewUserName(''); setNewUserPassword('') }} disabled={createUserLoading}>取消</button>
+              <button type="submit" className="icon-text-button primary" disabled={createUserLoading}>
+                {createUserLoading ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+                建立帳號
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {showPwdModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
