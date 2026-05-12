@@ -234,30 +234,37 @@ export default function AdminPanel({ onClose, session }) {
 
   async function handleCreateUser(e) {
     e.preventDefault()
-    if (!supabaseAdmin) {
-      alert('尚未設定 VITE_SUPABASE_SERVICE_ROLE_KEY，無法從介面新增帳號。')
-      return
-    }
     setCreateUserLoading(true)
     try {
       const name = newUserName.trim()
       const encodedName = encodeAccountName(name)
       const email = `${encodedName}@modern-lab.com`
 
-      const { data, error } = await supabaseAdmin.auth.admin.createUser({
+      // 儲存目前 admin session，signUp 後還原
+      const { data: { session: adminSession } } = await supabase.auth.getSession()
+
+      const { data, error } = await supabase.auth.signUp({
         email,
         password: newUserPassword,
-        user_metadata: { display_name: name, role: 'staff' },
-        email_confirm: true,
+        options: { data: { display_name: name, role: 'staff', account_id: encodedName } },
       })
       if (error) throw error
 
-      await supabaseAdmin.from('profiles').insert({
+      // 建立 profile（此時可能已切換到新帳號 session，INSERT policy 允許自己寫入）
+      await supabase.from('profiles').insert({
         id: data.user.id,
         display_name: name,
         role: 'staff',
         account_id: encodedName,
       })
+
+      // 還原 admin session
+      if (adminSession) {
+        await supabase.auth.setSession({
+          access_token: adminSession.access_token,
+          refresh_token: adminSession.refresh_token,
+        })
+      }
 
       setMessage(`帳號「${name}」已建立`)
       setShowCreateUserModal(false)
