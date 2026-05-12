@@ -197,7 +197,7 @@ function App() {
     localStorage.setItem('c13SeenCount', String(n))
   }
   const [activeTab, setActiveTab] = useState('all')
-  const [query, setQuery] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
   const [searchStartDate, setSearchStartDate] = useState('')
   const [searchEndDate, setSearchEndDate] = useState('')
   const [updatingId, setUpdatingId] = useState(null)
@@ -693,13 +693,13 @@ function App() {
             name={name}
             tasks={generalTasks}
             activeTab={activeTab}
-            query={query}
+            query={searchQuery}
             searchStartDate={searchStartDate}
             searchEndDate={searchEndDate}
             taskError={taskError}
             updatingId={updatingId}
             onTabChange={handleGeneralTabChange}
-            onQueryChange={setQuery}
+            onQueryChange={setSearchQuery}
             onStartDateChange={setSearchStartDate}
             onEndDateChange={setSearchEndDate}
             onCreate={openCreateModal}
@@ -765,7 +765,7 @@ function GeneralDashboard({
   name,
   tasks,
   activeTab,
-  query,
+  searchQuery,
   searchStartDate,
   searchEndDate,
   taskError,
@@ -823,7 +823,7 @@ function GeneralDashboard({
   }, [tasks, tabs, name])
 
   const filteredTasks = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase()
+    const normalizedQuery = searchQuery.trim().toLowerCase()
     return tasks.filter((task) => {
       const isClosed = task.status === STATUS_DONE || task.status === STATUS_VOIDED
       const isArchivedByMe = Array.isArray(task.archived_by) && task.archived_by.includes(name)
@@ -865,7 +865,7 @@ function GeneralDashboard({
       // 其次按時間排序（新的在前）
       return new Date(b.created_at) - new Date(a.created_at)
     })
-  }, [activeTab, query, tasks])
+  }, [activeTab, searchQuery, tasks])
 
   return (
     <>
