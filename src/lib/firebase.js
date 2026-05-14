@@ -13,4 +13,6 @@ const firebaseConfig = {
 
 export const app = initializeApp(firebaseConfig)
 export const db = getFirestore(app)
-export const messaging = getMessaging(app)
+export const messaging = (() => {
+  try { return getMessaging(app) } catch { return null }
+})()

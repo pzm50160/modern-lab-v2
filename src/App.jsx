@@ -814,7 +814,7 @@ function App() {
         ) : module === 'chat' ? (
           <ChatBoard currentUser={name} session={session} onResetUnread={() => setUnreadChatCount(0)} />
         ) : module === 'specimen' ? (
-          <Suspense fallback={null}>
+          <Suspense fallback={<div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-2)' }}>載入中…</div>}>
             <LegacySpecimen currentUser={name} isAdmin={isAdmin} />
           </Suspense>
         ) : null}
