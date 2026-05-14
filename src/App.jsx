@@ -47,6 +47,18 @@ import { messaging, db as firebaseDb } from './components/LegacySpecimen'
 import { compressImage } from './lib/imageUtils'
 import { migrateToHtml, ContentEditableEditor } from './lib/richText'
 
+function stripForNotification(text) {
+  if (!text) return ''
+  return text
+    .replace(/<[^>]*>/g, '')        // HTML 標籤
+    .replace(/- \[[ x]\] /g, '')    // Markdown checkbox
+    .replace(/^[-*]\s+/gm, '')      // Markdown 列表符號
+    .replace(/#{1,6}\s+/g, '')      // Markdown 標題
+    .replace(/\*\*?|__?/g, '')      // 粗體/斜體
+    .replace(/\n+/g, ' ')           // 換行合併為空白
+    .trim()
+}
+
 const DEFAULT_TABS = [
   { id: 'all', label: '總覽', icon: LayoutDashboard },
   { id: 'reported', label: '報告完成', icon: PackageCheck },
@@ -263,7 +275,7 @@ function App() {
         if (payload.new.creator_name && payload.new.creator_name !== currentUserName) {
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('🚨 實驗室新任務', {
-              body: `${payload.new.creator_name} 發布了：[${payload.new.category || payload.new.category_name}] ${payload.new.clinic || payload.new.content}`
+              body: `${payload.new.creator_name} 發布了：[${payload.new.category || payload.new.category_name}] ${stripForNotification(payload.new.clinic || payload.new.content)}`
             })
           }
         }
