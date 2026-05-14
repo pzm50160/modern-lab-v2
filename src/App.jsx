@@ -40,9 +40,8 @@ import {
   Tag,
   MessageSquare,
 } from 'lucide-react'
-import { collection, query, where, getDocs, updateDoc, doc, serverTimestamp } from 'firebase/firestore'
 import { getToken } from 'firebase/messaging'
-import { messaging, db as firebaseDb } from './lib/firebase'
+import { messaging } from './lib/firebase'
 import { compressImage } from './lib/imageUtils'
 import { migrateToHtml, ContentEditableEditor } from './lib/richText'
 
@@ -376,20 +375,7 @@ function App() {
       }
       console.log('[Push] 寫入 Supabase 成功')
 
-      try {
-        const q = query(collection(firebaseDb, 'users'), where('name', '==', displayName))
-        const snap = await getDocs(q)
-        if (!snap.empty) {
-          await updateDoc(doc(firebaseDb, 'users', snap.docs[0].id), {
-            fcmToken: token,
-            lastTokenUpdate: serverTimestamp()
-          })
-          console.log('[Push] 寫入 Firebase 成功')
-        }
-      } catch (fbErr) {
-        console.warn('[Push] 寫入 Firebase 失敗（不影響主通知）:', fbErr)
-      }
-
+      // 不寫入 Firebase users，避免收到檢體收送（v1 app）的通知
       return true
     } catch (error) {
       console.error('[Push] 設定通知失敗:', error)
