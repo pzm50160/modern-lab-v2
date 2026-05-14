@@ -55,7 +55,7 @@ function stripForNotification(text) {
     .replace(/^[-*]\s+/gm, '')      // Markdown 列表符號
     .replace(/#{1,6}\s+/g, '')      // Markdown 標題
     .replace(/\*\*?|__?/g, '')      // 粗體/斜體
-    .replace(/\n+/g, ' ')           // 換行合併為空白
+    .replace(/\n{2,}/g, '\n')        // 多個換行合為一個
     .trim()
 }
 
