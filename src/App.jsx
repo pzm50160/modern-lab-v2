@@ -223,6 +223,9 @@ function App() {
   const [notifEnabled, setNotifEnabled] = useState(
     () => localStorage.getItem('notif_enabled') !== 'false'
   )
+  const [specimenNotifEnabled, setSpecimenNotifEnabled] = useState(
+    () => localStorage.getItem('specimen_notif_enabled') === 'true'
+  )
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
@@ -346,50 +349,31 @@ function App() {
     }
   }
 
+  async function getFcmToken() {
+    const registration = await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker 等待逾時')), 10000))
+    ])
+    return getToken(messaging, {
+      vapidKey: 'BEQDpcx_iPGyzx-0-e_vctw5TqCseajRjCHCE9XeRi4TIfXEk5ndC-XwRyJFYuSmrTxej_zweULO6ib3DGbYCeE',
+      serviceWorkerRegistration: registration
+    })
+  }
+
   async function setupPushNotifications(uid, displayName) {
-    if (!('Notification' in window)) return false
-
+    if (!('Notification' in window) || Notification.permission !== 'granted') return false
     try {
-      if (Notification.permission !== 'granted') return false
+      const token = await getFcmToken()
+      if (!token) return false
+      console.log('[Push] Token:', token.substring(0, 10) + '...')
 
-      const registration = await Promise.race([
-        navigator.serviceWorker.ready,
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker 等待逾時')), 10000))
-      ])
-
-      const token = await getToken(messaging, {
-        vapidKey: 'BEQDpcx_iPGyzx-0-e_vctw5TqCseajRjCHCE9XeRi4TIfXEk5ndC-XwRyJFYuSmrTxej_zweULO6ib3DGbYCeE',
-        serviceWorkerRegistration: registration
-      })
-
-      if (!token) {
-        console.warn('[Push] 無法取得 FCM Token')
-        return false
-      }
-
-      console.log('[Push] 成功取得 Token:', token.substring(0, 10) + '...')
-
+      // 實驗室通知：寫入 Supabase
       const { error: sbError } = await supabase.from('profiles').update({ fcm_token: token }).eq('id', uid)
-      if (sbError) {
-        console.error('[Push] 寫入 Supabase 失敗:', sbError)
-        return false
-      }
+      if (sbError) { console.error('[Push] 寫入 Supabase 失敗:', sbError); return false }
       console.log('[Push] 寫入 Supabase 成功')
 
-      // 若 Firebase 裡存的剛好是 V2 的 token，才清除（避免誤刪 V1 的 token）
-      try {
-        const q = query(collection(firebaseDb, 'users'), where('name', '==', displayName))
-        const snap = await getDocs(q)
-        if (!snap.empty) {
-          const firebaseToken = snap.docs[0].data().fcmToken
-          if (firebaseToken === token) {
-            await updateDoc(doc(firebaseDb, 'users', snap.docs[0].id), { fcmToken: deleteField() })
-            console.log('[Push] 已清除誤存的 V2 token')
-          }
-        }
-      } catch (fbErr) {
-        console.warn('[Push] 清除 Firebase token 失敗（不影響通知）:', fbErr)
-      }
+      // 檢體收送通知：依開關決定寫入或清除 Firebase
+      await syncSpecimenToken(token, displayName, localStorage.getItem('specimen_notif_enabled') === 'true')
 
       return true
     } catch (error) {
@@ -398,44 +382,66 @@ function App() {
     }
   }
 
-  async function toggleNotifications() {
-    if (!('Notification' in window)) {
-      alert('此瀏覽器不支援通知功能')
-      return
-    }
-
-    if (notifEnabled && notifPermission === 'granted') {
-      const uid = session?.user?.id
-      if (uid) {
-        await supabase.from('profiles').update({ fcm_token: null }).eq('id', uid)
+  async function syncSpecimenToken(token, displayName, enable) {
+    try {
+      const q = query(collection(firebaseDb, 'users'), where('name', '==', displayName))
+      const snap = await getDocs(q)
+      if (snap.empty) return
+      const userDoc = doc(firebaseDb, 'users', snap.docs[0].id)
+      if (enable) {
+        await updateDoc(userDoc, { fcmToken: token })
+        console.log('[Push] 檢體收送通知已開啟（寫入 Firebase）')
+      } else {
+        const fbToken = snap.docs[0].data().fcmToken
+        if (fbToken === token) {
+          await updateDoc(userDoc, { fcmToken: deleteField() })
+          console.log('[Push] 檢體收送通知已關閉（清除 Firebase）')
+        }
       }
+    } catch (fbErr) {
+      console.warn('[Push] Firebase 同步失敗:', fbErr)
+    }
+  }
+
+  async function ensurePermission() {
+    if (!('Notification' in window)) { alert('此瀏覽器不支援通知功能'); return false }
+    if (Notification.permission === 'denied') {
+      alert('通知已被瀏覽器封鎖。\n請至瀏覽器設定將此網站的通知設為「允許」，再重新整理頁面。')
+      return false
+    }
+    if (Notification.permission === 'default') {
+      const p = await Notification.requestPermission()
+      setNotifPermission(p)
+      if (p !== 'granted') return false
+    }
+    return true
+  }
+
+  async function toggleLabNotif() {
+    if (notifEnabled && notifPermission === 'granted') {
+      await supabase.from('profiles').update({ fcm_token: null }).eq('id', session?.user?.id)
       localStorage.setItem('notif_enabled', 'false')
       setNotifEnabled(false)
-      alert('🔕 通知已關閉。')
       return
     }
+    if (!await ensurePermission()) return
+    const token = await getFcmToken().catch(() => null)
+    if (!token) { alert('⚠️ 無法取得 Token，請稍後再試。'); return }
+    const { error } = await supabase.from('profiles').update({ fcm_token: token }).eq('id', session?.user?.id)
+    if (error) { alert('⚠️ 儲存失敗，請稍後再試。'); return }
+    localStorage.setItem('notif_enabled', 'true')
+    setNotifEnabled(true)
+  }
 
-    if (Notification.permission === 'denied') {
-      alert('通知已被瀏覽器封鎖。\n請至瀏覽器網址列左側點選「鎖頭」圖示，將此網站的通知設為「允許」，再重新整理頁面。')
-      return
-    }
-
-    const permission = await Notification.requestPermission()
-    setNotifPermission(permission)
-    if (permission !== 'granted') return
-
-    const uid = session?.user?.id
+  async function toggleSpecimenNotif() {
+    if (!await ensurePermission()) return
+    const token = await getFcmToken().catch(() => null)
+    if (!token) { alert('⚠️ 無法取得 Token，請稍後再試。'); return }
     const displayName = profile?.display_name || displayNameFromSession(session)
-    if (!uid) return
-
-    const success = await setupPushNotifications(uid, displayName)
-    if (success) {
-      localStorage.setItem('notif_enabled', 'true')
-      setNotifEnabled(true)
-      alert('✅ 通知設定成功！之後有新工作事項時會收到通知。')
-    } else {
-      alert('⚠️ 通知權限已取得，但 Token 儲存失敗。\n請確認網路連線後再試一次，或聯絡管理員確認 Supabase profiles 表格有 fcm_token 欄位。')
-    }
+    const next = !specimenNotifEnabled
+    await syncSpecimenToken(token, displayName, next)
+    localStorage.setItem('specimen_notif_enabled', next ? 'true' : 'false')
+    setSpecimenNotifEnabled(next)
   }
 
   async function fetchTasks() {
@@ -713,20 +719,31 @@ function App() {
           </button>
           {'Notification' in window && (
             notifPermission === 'denied' ? (
-              <button className="icon-text-button ghost" title="通知被瀏覽器封鎖，點擊查看說明" style={{ color: 'var(--red)' }} onClick={toggleNotifications}>
+              <button className="icon-text-button ghost" style={{ color: 'var(--red)' }} onClick={ensurePermission}>
                 <BellOff size={18} />
                 通知被封鎖
               </button>
-            ) : notifEnabled && notifPermission === 'granted' ? (
-              <button className="icon-text-button ghost" title="點擊關閉通知" style={{ color: 'var(--green)' }} onClick={toggleNotifications}>
-                <Bell size={18} />
-                通知開啟中
-              </button>
             ) : (
-              <button className="icon-text-button ghost" title="點擊開啟通知" onClick={toggleNotifications}>
-                <Bell size={18} />
-                開啟通知
-              </button>
+              <div style={{ display: 'flex', gap: '6px' }}>
+                <button
+                  className="icon-text-button ghost"
+                  title="實驗室通知"
+                  style={notifEnabled && notifPermission === 'granted' ? { color: 'var(--green)' } : {}}
+                  onClick={toggleLabNotif}
+                >
+                  {notifEnabled && notifPermission === 'granted' ? <Bell size={16} /> : <BellOff size={16} />}
+                  實驗室
+                </button>
+                <button
+                  className="icon-text-button ghost"
+                  title="檢體收送通知"
+                  style={specimenNotifEnabled && notifPermission === 'granted' ? { color: 'var(--green)' } : {}}
+                  onClick={toggleSpecimenNotif}
+                >
+                  {specimenNotifEnabled && notifPermission === 'granted' ? <Bell size={16} /> : <BellOff size={16} />}
+                  檢體收送
+                </button>
+              </div>
             )
           )}
           <button className="icon-button" title="登出" onClick={() => supabase.auth.signOut()}>
