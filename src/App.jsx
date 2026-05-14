@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { supabase } from './lib/supabase'
 import Login from './components/Login'
-import AdminPanel from './components/AdminPanel'
-import TaskModal from './components/TaskModal'
-import LegacySpecimen from './components/LegacySpecimen'
-import RecheckDashboard from './components/RecheckDashboard'
-import C13Dashboard from './components/C13Dashboard'
+const AdminPanel = lazy(() => import('./components/AdminPanel'))
+const TaskModal = lazy(() => import('./components/TaskModal'))
+const LegacySpecimen = lazy(() => import('./components/LegacySpecimen'))
+const RecheckDashboard = lazy(() => import('./components/RecheckDashboard'))
+const C13Dashboard = lazy(() => import('./components/C13Dashboard'))
 import {
   AlertCircle,
   Archive,
@@ -43,7 +43,7 @@ import {
 import { db } from './components/LegacySpecimen'
 import { collection, query, where, getDocs, updateDoc, doc, serverTimestamp } from 'firebase/firestore'
 import { getToken } from 'firebase/messaging'
-import { messaging, db as firebaseDb } from './components/LegacySpecimen'
+import { messaging, db as firebaseDb } from './lib/firebase'
 import { compressImage } from './lib/imageUtils'
 import { migrateToHtml, ContentEditableEditor } from './lib/richText'
 
@@ -687,7 +687,9 @@ function App() {
 
   return (
     <div className="app-shell">
-      {showAdmin && isAdmin && <AdminPanel onClose={() => setShowAdmin(false)} session={session} />}
+      <Suspense fallback={null}>
+        {showAdmin && isAdmin && <AdminPanel onClose={() => setShowAdmin(false)} session={session} />}
+      </Suspense>
       <nav className="nav-bar">
         <div>
           <div className="nav-logo">Modern Lab 工作台</div>
@@ -795,22 +797,24 @@ function App() {
         ) : module === 'chat' ? (
           <ChatBoard currentUser={name} session={session} onResetUnread={() => setUnreadChatCount(0)} />
         ) : module === 'specimen' ? (
-          <LegacySpecimen
-            currentUser={name}
-            isAdmin={isAdmin}
-          />
+          <Suspense fallback={null}>
+            <LegacySpecimen currentUser={name} isAdmin={isAdmin} />
+          </Suspense>
         ) : null}
 
-        {/* RecheckDashboard 永遠保持掛載，只用 CSS 顯示/隱藏，避免切換模組時狀態消失 */}
-        <div style={{ display: module === 'recheck' ? 'block' : 'none' }}>
-          <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} />
-        </div>
-        <div style={{ display: module === 'c13' ? 'block' : 'none' }}>
-          <C13Dashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setC13PendingCount} />
-        </div>
+        {/* RecheckDashboard / C13Dashboard 永遠保持掛載，只用 CSS 顯示/隱藏，避免切換模組時狀態消失 */}
+        <Suspense fallback={null}>
+          <div style={{ display: module === 'recheck' ? 'block' : 'none' }}>
+            <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} />
+          </div>
+          <div style={{ display: module === 'c13' ? 'block' : 'none' }}>
+            <C13Dashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setC13PendingCount} />
+          </div>
+        </Suspense>
       </main>
 
       {showTaskModal && (
+        <Suspense fallback={null}>
         <TaskModal
           isOpen={showTaskModal}
           onClose={() => {
@@ -824,6 +828,7 @@ function App() {
           dynamicHandoffCategories={dynamicTabs.filter(t => t.id !== 'all' && t.id !== 'history' && t.id !== 'reported').map(t => t.id)}
           editTask={editingTask}
         />
+        </Suspense>
       )}
 
       {previewImage && <ImageViewer image={previewImage} onClose={() => setPreviewImage(null)} />}
