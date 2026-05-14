@@ -9,6 +9,8 @@ import C13Dashboard from './components/C13Dashboard'
 import {
   AlertCircle,
   Archive,
+  Bell,
+  BellOff,
   Boxes,
   CheckCircle2,
   ClipboardCheck,
@@ -204,6 +206,12 @@ function App() {
   const [previewImage, setPreviewImage] = useState(null)
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [categories, setCategories] = useState([])
+  const [notifPermission, setNotifPermission] = useState(
+    'Notification' in window ? Notification.permission : 'denied'
+  )
+  const [notifEnabled, setNotifEnabled] = useState(
+    () => localStorage.getItem('notif_enabled') !== 'false'
+  )
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
@@ -321,60 +329,93 @@ function App() {
   }
 
   async function setupPushNotifications(uid, displayName) {
-    if (!('Notification' in window)) return
+    if (!('Notification' in window)) return false
 
     try {
-      let permission = Notification.permission
-      if (permission === 'default') {
-        permission = await Notification.requestPermission()
+      if (Notification.permission !== 'granted') return false
+
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Service Worker 等待逾時')), 10000))
+      ])
+
+      const token = await getToken(messaging, {
+        vapidKey: 'BEQDpcx_iPGyzx-0-e_vctw5TqCseajRjCHCE9XeRi4TIfXEk5ndC-XwRyJFYuSmrTxej_zweULO6ib3DGbYCeE',
+        serviceWorkerRegistration: registration
+      })
+
+      if (!token) {
+        console.warn('[Push] 無法取得 FCM Token')
+        return false
       }
 
-      if (permission === 'granted') {
-        console.log('[Push] 權限已核准，正在準備 Service Worker...')
-        const registration = await navigator.serviceWorker.ready
-        console.log('[Push] Service Worker 已就緒:', registration.scope)
+      console.log('[Push] 成功取得 Token:', token.substring(0, 10) + '...')
 
-        const token = await getToken(messaging, {
-          vapidKey: 'BEQDpcx_iPGyzx-0-e_vctw5TqCseajRjCHCE9XeRi4TIfXEk5ndC-XwRyJFYuSmrTxej_zweULO6ib3DGbYCeE',
-          serviceWorkerRegistration: registration
-        })
+      const { error: sbError } = await supabase.from('profiles').update({ fcm_token: token }).eq('id', uid)
+      if (sbError) {
+        console.error('[Push] 寫入 Supabase 失敗:', sbError)
+        return false
+      }
+      console.log('[Push] 寫入 Supabase 成功')
 
-        if (token) {
-          console.log('[Push] 成功取得 Token:', token.substring(0, 10) + '...')
-          
-          // 1. 同步到 Supabase profiles (優先執行)
-          const { error: sbError } = await supabase.from('profiles').update({ fcm_token: token }).eq('id', uid)
-          if (sbError) {
-            console.error('[Push] 寫入 Supabase 失敗:', sbError)
-          } else {
-            console.log('[Push] 寫入 Supabase 成功')
-          }
-
-          // 2. 同步到 Firebase users (供舊版系統使用，失敗不影響新版)
-          try {
-            const q = query(collection(firebaseDb, 'users'), where('name', '==', displayName))
-            const snap = await getDocs(q)
-            if (!snap.empty) {
-              const userDocId = snap.docs[0].id
-              await updateDoc(doc(firebaseDb, 'users', userDocId), { 
-                fcmToken: token,
-                lastTokenUpdate: serverTimestamp() 
-              })
-              console.log('[Push] 寫入 Firebase 成功')
-            } else {
-              console.warn('[Push] Firebase 找不到對應的使用者:', displayName)
-            }
-          } catch (fbErr) {
-            console.error('[Push] 寫入 Firebase 失敗:', fbErr)
-          }
-        } else {
-          console.warn('[Push] 無法取得 Token')
+      try {
+        const q = query(collection(firebaseDb, 'users'), where('name', '==', displayName))
+        const snap = await getDocs(q)
+        if (!snap.empty) {
+          await updateDoc(doc(firebaseDb, 'users', snap.docs[0].id), {
+            fcmToken: token,
+            lastTokenUpdate: serverTimestamp()
+          })
+          console.log('[Push] 寫入 Firebase 成功')
         }
-      } else {
-        console.warn('[Push] 通知權限被拒絕:', permission)
+      } catch (fbErr) {
+        console.warn('[Push] 寫入 Firebase 失敗（不影響主通知）:', fbErr)
       }
+
+      return true
     } catch (error) {
-      console.error('[Push] 同步 Token 失敗:', error)
+      console.error('[Push] 設定通知失敗:', error)
+      return false
+    }
+  }
+
+  async function toggleNotifications() {
+    if (!('Notification' in window)) {
+      alert('此瀏覽器不支援通知功能')
+      return
+    }
+
+    if (notifEnabled && notifPermission === 'granted') {
+      const uid = session?.user?.id
+      if (uid) {
+        await supabase.from('profiles').update({ fcm_token: null }).eq('id', uid)
+      }
+      localStorage.setItem('notif_enabled', 'false')
+      setNotifEnabled(false)
+      alert('🔕 通知已關閉。')
+      return
+    }
+
+    if (Notification.permission === 'denied') {
+      alert('通知已被瀏覽器封鎖。\n請至瀏覽器網址列左側點選「鎖頭」圖示，將此網站的通知設為「允許」，再重新整理頁面。')
+      return
+    }
+
+    const permission = await Notification.requestPermission()
+    setNotifPermission(permission)
+    if (permission !== 'granted') return
+
+    const uid = session?.user?.id
+    const displayName = profile?.display_name || displayNameFromSession(session)
+    if (!uid) return
+
+    const success = await setupPushNotifications(uid, displayName)
+    if (success) {
+      localStorage.setItem('notif_enabled', 'true')
+      setNotifEnabled(true)
+      alert('✅ 通知設定成功！之後有新工作事項時會收到通知。')
+    } else {
+      alert('⚠️ 通知權限已取得，但 Token 儲存失敗。\n請確認網路連線後再試一次，或聯絡管理員確認 Supabase profiles 表格有 fcm_token 欄位。')
     }
   }
 
@@ -649,6 +690,24 @@ function App() {
             <ShieldCheck size={18} />
             修改密碼
           </button>
+          {'Notification' in window && (
+            notifPermission === 'denied' ? (
+              <button className="icon-text-button ghost" title="通知被瀏覽器封鎖，點擊查看說明" style={{ color: 'var(--red)' }} onClick={toggleNotifications}>
+                <BellOff size={18} />
+                通知被封鎖
+              </button>
+            ) : notifEnabled && notifPermission === 'granted' ? (
+              <button className="icon-text-button ghost" title="點擊關閉通知" style={{ color: 'var(--green)' }} onClick={toggleNotifications}>
+                <Bell size={18} />
+                通知開啟中
+              </button>
+            ) : (
+              <button className="icon-text-button ghost" title="點擊開啟通知" onClick={toggleNotifications}>
+                <Bell size={18} />
+                開啟通知
+              </button>
+            )
+          )}
           <button className="icon-button" title="登出" onClick={() => supabase.auth.signOut()}>
             <LogOut size={19} />
           </button>
