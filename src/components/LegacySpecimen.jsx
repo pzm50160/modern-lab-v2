@@ -1,20 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, updateDoc, doc, serverTimestamp, getDocs, where, deleteDoc } from 'firebase/firestore';
-import { getMessaging, getToken, onMessage } from 'firebase/messaging';
-
-const firebaseConfig = {
-  apiKey: "AIzaSyCaxWnFi78Rrra5gEuFRWPN-4jdEUFWLp8",
-  authDomain: "modern-lab-app.firebaseapp.com",
-  projectId: "modern-lab-app",
-  storageBucket: "modern-lab-app.firebasestorage.app",
-  messagingSenderId: "154018152899",
-  appId: "1:154018152899:web:21c8435ed7e68221b13d76"
-};
-
-export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
-export const messaging = getMessaging(app);
+import { collection, addDoc, onSnapshot, query, orderBy, updateDoc, doc, serverTimestamp, getDocs, where, deleteDoc } from 'firebase/firestore';
+import { onMessage } from 'firebase/messaging';
+import { db, messaging } from '../lib/firebase';
 
 const getTodayStr = () => new Date().toLocaleDateString('en-CA');
 

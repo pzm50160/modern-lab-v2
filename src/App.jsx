@@ -40,7 +40,6 @@ import {
   Tag,
   MessageSquare,
 } from 'lucide-react'
-import { db } from './components/LegacySpecimen'
 import { collection, query, where, getDocs, updateDoc, doc, serverTimestamp } from 'firebase/firestore'
 import { getToken } from 'firebase/messaging'
 import { messaging, db as firebaseDb } from './lib/firebase'

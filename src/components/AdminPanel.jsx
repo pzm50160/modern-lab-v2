@@ -14,7 +14,7 @@ import {
   Key,
   RefreshCw,
 } from 'lucide-react'
-import { db } from './LegacySpecimen'
+import { db } from '../lib/firebase'
 import { collection, query, where, getDocs, addDoc, updateDoc, doc, deleteDoc } from 'firebase/firestore'
 
 export default function AdminPanel({ onClose, session }) {
