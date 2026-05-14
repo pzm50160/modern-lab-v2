@@ -262,7 +262,14 @@ function App() {
     if (!session) return undefined
 
     if ('Notification' in window && Notification.permission === 'default') {
-      Notification.requestPermission()
+      Notification.requestPermission().then((permission) => {
+        setNotifPermission(permission)
+        if (permission === 'granted') {
+          const uid = session?.user?.id
+          const displayName = profile?.display_name || displayNameFromSession(session)
+          if (uid) setupPushNotifications(uid, displayName)
+        }
+      })
     }
 
     fetchTasks()
