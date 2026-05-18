@@ -404,7 +404,10 @@ function App() {
   }
 
   async function ensurePermission() {
-    if (!('Notification' in window)) { alert('此瀏覽器不支援通知功能'); return false }
+    if (!('Notification' in window)) {
+      alert('此瀏覽器不支援通知功能。\n\niOS 請點右下角分享按鈕 →「加入主畫面」，以 App 方式開啟即可啟用通知。')
+      return false
+    }
     if (Notification.permission === 'denied') {
       alert('通知已被瀏覽器封鎖。\n請至瀏覽器設定將此網站的通知設為「允許」，再重新整理頁面。')
       return false
@@ -717,34 +720,32 @@ function App() {
             <ShieldCheck size={18} />
             修改密碼
           </button>
-          {'Notification' in window && (
-            notifPermission === 'denied' ? (
-              <button className="icon-text-button ghost" style={{ color: 'var(--red)' }} onClick={ensurePermission}>
-                <BellOff size={18} />
-                通知被封鎖
+          {notifPermission === 'denied' ? (
+            <button className="icon-text-button ghost" style={{ color: 'var(--red)' }} onClick={ensurePermission}>
+              <BellOff size={18} />
+              通知被封鎖
+            </button>
+          ) : (
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <button
+                className="icon-text-button ghost"
+                title="實驗室通知"
+                style={notifEnabled && notifPermission === 'granted' ? { color: 'var(--green)' } : {}}
+                onClick={toggleLabNotif}
+              >
+                {notifEnabled && notifPermission === 'granted' ? <Bell size={16} /> : <BellOff size={16} />}
+                實驗室
               </button>
-            ) : (
-              <div style={{ display: 'flex', gap: '6px' }}>
-                <button
-                  className="icon-text-button ghost"
-                  title="實驗室通知"
-                  style={notifEnabled && notifPermission === 'granted' ? { color: 'var(--green)' } : {}}
-                  onClick={toggleLabNotif}
-                >
-                  {notifEnabled && notifPermission === 'granted' ? <Bell size={16} /> : <BellOff size={16} />}
-                  實驗室
-                </button>
-                <button
-                  className="icon-text-button ghost"
-                  title="檢體收送通知"
-                  style={specimenNotifEnabled && notifPermission === 'granted' ? { color: 'var(--green)' } : {}}
-                  onClick={toggleSpecimenNotif}
-                >
-                  {specimenNotifEnabled && notifPermission === 'granted' ? <Bell size={16} /> : <BellOff size={16} />}
-                  檢體收送
-                </button>
-              </div>
-            )
+              <button
+                className="icon-text-button ghost"
+                title="檢體收送通知"
+                style={specimenNotifEnabled && notifPermission === 'granted' ? { color: 'var(--green)' } : {}}
+                onClick={toggleSpecimenNotif}
+              >
+                {specimenNotifEnabled && notifPermission === 'granted' ? <Bell size={16} /> : <BellOff size={16} />}
+                檢體收送
+              </button>
+            </div>
           )}
           <button className="icon-button" title="登出" onClick={() => supabase.auth.signOut()}>
             <LogOut size={19} />

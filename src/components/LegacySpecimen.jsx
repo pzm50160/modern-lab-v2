@@ -67,11 +67,11 @@ export default function LegacySpecimen({ currentUser, isAdmin }) {
         currentPermission = await Notification.requestPermission();
       }
 
-      if (currentPermission === 'granted') {
+      if (currentPermission === 'granted' && messaging) {
         const registration = await navigator.serviceWorker.ready;
-        const newToken = await getToken(messaging, { 
+        const newToken = await getToken(messaging, {
           vapidKey: 'BEQDpcx_iPGyzx-0-e_vctw5TqCseajRjCHCE9XeRi4TIfXEk5ndC-XwRyJFYuSmrTxej_zweULO6ib3DGbYCeE',
-          serviceWorkerRegistration: registration 
+          serviceWorkerRegistration: registration
         });
         
         if (newToken && newToken !== oldToken) {
@@ -88,14 +88,14 @@ export default function LegacySpecimen({ currentUser, isAdmin }) {
   };
 
   useEffect(() => {
-    const unsubMessage = onMessage(messaging, (payload) => {
+    const unsubMessage = messaging ? onMessage(messaging, (payload) => {
       console.log("收到前景訊息封包:", payload);
       if (payload.notification) {
         alert(`${payload.notification.title}\n${payload.notification.body}`);
       } else if (payload.data && payload.data.body) {
         alert(`${payload.data.title || '🚨 實驗室新任務'}\n${payload.data.body}`);
       }
-    });
+    }) : () => {};
 
     const qTasks = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
     const unsubTasks = onSnapshot(qTasks, (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))));
