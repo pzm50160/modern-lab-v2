@@ -190,6 +190,7 @@ function App() {
   const [taskError, setTaskError] = useState('')
   const [module, setModule] = useState('general')
   const moduleRef = React.useRef('general')
+  const currentUserNameRef = React.useRef('')
   const [unreadChatCount, setUnreadChatCount] = useState(0)
   const [recheckPendingCount, setRecheckPendingCount] = useState(0)
   const [recheckSeenCount, setRecheckSeenCountState] = useState(() => {
@@ -251,6 +252,11 @@ function App() {
     fetchCategories()
   }, [showAdmin])
 
+  // 隨時同步最新使用者名稱到 ref，讓 Realtime callback 不需要依賴 profile/session closure
+  useEffect(() => {
+    currentUserNameRef.current = profile?.display_name || displayNameFromSession(session) || ''
+  }, [profile, session])
+
   async function fetchCategories() {
     const { data, error } = await supabase.from('categories').select('*').order('name')
     if (error) {
@@ -260,6 +266,7 @@ function App() {
     setCategories(data || [])
   }
 
+  // Realtime 訂閱：只依賴 session，避免 profile 載入或日期過濾變動時頻繁重建 channel
   useEffect(() => {
     if (!session) return undefined
 
@@ -268,20 +275,15 @@ function App() {
         setNotifPermission(permission)
         if (permission === 'granted') {
           const uid = session?.user?.id
-          const displayName = profile?.display_name || displayNameFromSession(session)
-          if (uid) setupPushNotifications(uid, displayName)
+          if (uid) setupPushNotifications(uid, currentUserNameRef.current)
         }
       })
     }
 
-    fetchTasks()
-
-    const currentUserName = profile?.display_name || displayNameFromSession(session)
-
     const channel = supabase
       .channel('work-items')
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tasks' }, (payload) => {
-        if (payload.new.creator_name && payload.new.creator_name !== currentUserName) {
+        if (payload.new.creator_name && payload.new.creator_name !== currentUserNameRef.current) {
           if ('Notification' in window && Notification.permission === 'granted') {
             new Notification('🚨 實驗室新任務', {
               body: `${payload.new.creator_name} 發布了：[${payload.new.category || payload.new.category_name}] ${stripForNotification(payload.new.clinic || payload.new.content)}`
@@ -299,7 +301,13 @@ function App() {
       .subscribe()
 
     return () => supabase.removeChannel(channel)
-  }, [session, profile, searchStartDate, searchEndDate])
+  }, [session])
+
+  // 初始載入與日期過濾變動時重新撈任務
+  useEffect(() => {
+    if (!session) return
+    fetchTasks()
+  }, [session, searchStartDate, searchEndDate])
 
   // 同步 moduleRef
   useEffect(() => { moduleRef.current = module }, [module])
