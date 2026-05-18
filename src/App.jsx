@@ -288,10 +288,14 @@ function App() {
             })
           }
         }
-        fetchTasks()
+        setTasks(prev => prev.some(t => t.id === payload.new.id) ? prev : [payload.new, ...prev])
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tasks' }, fetchTasks)
-      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'tasks' }, fetchTasks)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'tasks' }, (payload) => {
+        setTasks(prev => prev.map(t => t.id === payload.new.id ? payload.new : t))
+      })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'tasks' }, (payload) => {
+        setTasks(prev => prev.filter(t => t.id !== payload.old.id))
+      })
       .subscribe()
 
     return () => supabase.removeChannel(channel)
@@ -460,6 +464,10 @@ function App() {
 
       // 確保「待辦/進行中 (status=0)」的任務不論日期都會被抓取，而歷史任務則根據日期範圍過濾
       tasksQuery = tasksQuery.or(`status.eq.0,and(created_at.gte.${start},created_at.lte.${end}),and(completed_at.gte.${start},completed_at.lte.${end}),and(updated_at.gte.${start},updated_at.lte.${end})`)
+    } else {
+      // 無日期過濾：待辦永遠顯示，已完成限制最近 90 天，避免全表掃描
+      const ninetyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString()
+      tasksQuery = tasksQuery.or(`status.eq.0,updated_at.gte.${ninetyDaysAgo}`)
     }
 
     const { data, error } = await tasksQuery
