@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "deploy": "npm run build && firebase deploy --only hosting",
     "fix:profiles": "node scripts/fixProfiles.js",
-    "migrate:users": "node scripts/migrateUsers.js"
+    "migrate:users": "node scripts/migrateUsers.js",
+    "setup:storage": "node scripts/setupStorage.js",
+    "migrate:images": "node scripts/migrateImages.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.101.0",

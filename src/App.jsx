@@ -43,7 +43,7 @@ import {
 import { getToken } from 'firebase/messaging'
 import { collection, query, where, getDocs, updateDoc, doc, deleteField } from 'firebase/firestore'
 import { messaging, db as firebaseDb } from './lib/firebase'
-import { compressImage } from './lib/imageUtils'
+import { compressAndUploadImage, deleteStorageImage } from './lib/imageUtils'
 import { migrateToHtml, ContentEditableEditor } from './lib/richText'
 
 function stripForNotification(text) {
@@ -616,6 +616,8 @@ function App() {
     if (error) {
       alert(`刪除失敗：${error.message}`)
       await fetchTasks()
+    } else if (Array.isArray(task.image_urls) && task.image_urls.length > 0) {
+      Promise.allSettled(task.image_urls.map(deleteStorageImage))
     }
     setUpdatingId(null)
   }
@@ -1331,6 +1333,7 @@ function TaskRow({
 
   const [localContent, setLocalContent] = React.useState(task.content)
   const [isEditing, setIsEditing] = React.useState(false)
+  const pendingDeleteUrls = React.useRef([])
   const [editForm, setEditForm] = React.useState({
     content: task.content || '',
     category_name: task.category_name || '待辦',
@@ -1412,7 +1415,7 @@ function TaskRow({
         .join('\n')
     }
     
-    onEdit({ 
+    onEdit({
       content: finalContent,
       category_name: editForm.category_name,
       deadline: editForm.deadline ? new Date(editForm.deadline).toISOString() : null,
@@ -1420,6 +1423,8 @@ function TaskRow({
       image_urls: editForm.image_urls,
       checklist: editForm.checklist,
     })
+    Promise.allSettled(pendingDeleteUrls.current.map(deleteStorageImage))
+    pendingDeleteUrls.current = []
     setIsEditing(false)
   }
 
@@ -1433,11 +1438,8 @@ function TaskRow({
     if (!files.length) return
 
     try {
-      const compressedImages = await Promise.all(files.map((file) => compressImage(file)))
-      setEditForm({
-        ...editForm,
-        image_urls: [...editForm.image_urls, ...compressedImages].slice(0, 9),
-      })
+      const uploadedUrls = await Promise.all(files.map((file) => compressAndUploadImage(file)))
+      setEditForm(prev => ({ ...prev, image_urls: [...prev.image_urls, ...uploadedUrls].slice(0, 9) }))
     } catch (error) {
       alert(`處理圖片時發生錯誤: ${error.message}`)
     } finally {
@@ -1446,10 +1448,9 @@ function TaskRow({
   }
 
   function removeImage(index) {
-    setEditForm({
-      ...editForm,
-      image_urls: editForm.image_urls.filter((_, i) => i !== index)
-    })
+    const url = editForm.image_urls[index]
+    if (url && !url.startsWith('data:')) pendingDeleteUrls.current.push(url)
+    setEditForm(prev => ({ ...prev, image_urls: prev.image_urls.filter((_, i) => i !== index) }))
   }
 
   const [localChecklist, setLocalChecklist] = React.useState(checklist)

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { compressImage } from '../lib/imageUtils'
+import { compressAndUploadImage, deleteStorageImage } from '../lib/imageUtils'
 import { ContentEditableEditor } from '../lib/richText'
 import { AlertCircle, Camera, Clock, Loader2, Plus, Send, Tag, Trash2, X } from 'lucide-react'
 
@@ -39,6 +39,7 @@ export default function TaskModal({
     checklist: [],
   })
   const [checkItem, setCheckItem] = useState('')
+  const pendingDeleteUrls = useRef([])
   const [savedItems, setSavedItems] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem(CHECKLIST_TEMPLATE_KEY) || '[]')
@@ -75,6 +76,7 @@ export default function TaskModal({
   // 編輯模式：預填表單
   useEffect(() => {
     if (!isOpen) return
+    pendingDeleteUrls.current = []
     if (editTask) {
       const dl = editTask.deadline
         ? new Date(editTask.deadline).toISOString().slice(0, 16)
@@ -147,6 +149,8 @@ export default function TaskModal({
       if (error) {
         alert(`更新失敗：${error.message}`)
       } else {
+        await Promise.allSettled(pendingDeleteUrls.current.map(deleteStorageImage))
+        pendingDeleteUrls.current = []
         await onTaskAdded()
         onClose()
       }
@@ -177,6 +181,7 @@ export default function TaskModal({
       if (error) {
         alert(`新增失敗：${error.message}`)
       } else {
+        pendingDeleteUrls.current = []
         setFormData({
           content: '',
           category_name: defaultCategory,
@@ -376,11 +381,11 @@ export default function TaskModal({
 
     setLoading(true)
     try {
-      const compressedImages = await Promise.all(files.map((file) => compressImage(file)))
-      setFormData({
-        ...formData,
-        image_urls: [...formData.image_urls, ...compressedImages].slice(0, 9),
-      })
+      const uploadedUrls = await Promise.all(files.map((file) => compressAndUploadImage(file)))
+      setFormData(prev => ({
+        ...prev,
+        image_urls: [...prev.image_urls, ...uploadedUrls].slice(0, 9),
+      }))
     } catch (error) {
       alert(`處理圖片時發生錯誤: ${error.message}`)
     } finally {
@@ -480,10 +485,11 @@ export default function TaskModal({
                   <button
                     type="button"
                     className="image-remove"
-                    onClick={() => setFormData({
-                      ...formData,
-                      image_urls: formData.image_urls.filter((_, imageIndex) => imageIndex !== index),
-                    })}
+                    onClick={() => {
+                      const url = formData.image_urls[index]
+                      if (url && !url.startsWith('data:')) pendingDeleteUrls.current.push(url)
+                      setFormData(prev => ({ ...prev, image_urls: prev.image_urls.filter((_, i) => i !== index) }))
+                    }}
                   >
                     <X size={14} />
                   </button>
