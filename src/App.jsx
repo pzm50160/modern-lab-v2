@@ -613,8 +613,10 @@ function App() {
     if (!window.confirm('管理員您好，確定要永久刪除此任務嗎？此動作無法復原。')) return
     setUpdatingId(task.id)
     const { error } = await supabase.from('tasks').delete().eq('id', task.id)
-    if (error) alert(`刪除失敗：${error.message}`)
-    else await fetchTasks()
+    if (error) {
+      alert(`刪除失敗：${error.message}`)
+      await fetchTasks()
+    }
     setUpdatingId(null)
   }
 
