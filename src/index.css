@@ -582,10 +582,9 @@ button:disabled {
   display: flex;
   flex-direction: row;
   gap: 8px;
-  height: 1px;
-  min-height: 100%;
   padding: 0;
   flex-shrink: 0;
+  align-self: flex-start;
 }
 
 .task-images-side button {
@@ -593,8 +592,8 @@ button:disabled {
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  height: 100%;
-  max-width: 150px;
+  height: auto;
+  max-width: 180px;
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
@@ -603,9 +602,10 @@ button:disabled {
 }
 
 .task-images-side img {
-  height: 100%;
+  height: auto;
+  max-height: 200px;
   width: auto;
-  max-width: 200px;
+  max-width: 180px;
   object-fit: contain;
   display: block;
 }

@@ -556,7 +556,7 @@ function App() {
 
     await updateTask(task, {
       checklist: nextChecklist,
-      history: appendHistory(task, `${target.done ? '取消勾選' : '勾選'}了 ${target.text || '項目'}`, name),
+      history: appendHistory(task, `${target.done ? '取消勾選' : '勾選'}了 ${stripForNotification(target.text) || '項目'}`, name),
       updated_at: new Date().toISOString(),
     }, '更新勾選項目失敗')
 
