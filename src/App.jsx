@@ -1860,7 +1860,7 @@ function TaskRow({
                           }}>外送</button>
                         )
                       )}
-                      {isSpecial && !isHistorical && (
+                      {isSpecial && isChecked && !isHistorical && (
                         reportTime ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--purple, #7c3aed)', whiteSpace: 'nowrap' }}>
                             報告已發出
