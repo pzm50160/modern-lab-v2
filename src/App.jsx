@@ -1860,7 +1860,9 @@ function TaskRow({
                           }}>外送</button>
                         )
                       )}
-                      {isSpecial && isChecked && !isHistorical && (
+                      {isSpecial && !isHistorical && (
+                        <span style={{ minWidth: '82px', display: 'inline-flex', justifyContent: 'flex-end', flexShrink: 0 }}>
+                        {isChecked && (
                         reportTime ? (
                           <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--purple, #7c3aed)', whiteSpace: 'nowrap' }}>
                             報告已發出
@@ -1882,6 +1884,8 @@ function TaskRow({
                             onEdit({ content: newContent, _log_only: `報告已發出：${stripForNotification(rawText) || '項目'}` })
                           }}>報告已發出</button>
                         )
+                        )}
+                        </span>
                       )}
                     </div>
                   )
