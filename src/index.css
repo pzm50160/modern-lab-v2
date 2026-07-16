@@ -1432,6 +1432,8 @@ th {
   color: var(--text);
   padding: 6px 4px !important;
   font-family: inherit;
+  resize: none;
+  overflow-y: hidden;
 }
 
 .line-editor-input::placeholder {

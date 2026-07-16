@@ -16,7 +16,7 @@ const getTaskCardColors = (cat, priority, isDeleted) => {
   return config[cat] || { bg: '#f9f0ff', border: '#d3adf7', text: '#722ed1' };
 };
 
-export default function LegacySpecimen({ currentUser, isAdmin }) {
+export default function LegacySpecimen({ currentUser, isAdmin, onBadgeChange }) {
   const [tasks, setTasks] = useState([]);
   const [categories, setCategories] = useState([]);
   const [activeTab, setActiveTab] = useState('lobby');
@@ -98,7 +98,11 @@ export default function LegacySpecimen({ currentUser, isAdmin }) {
     }) : () => {};
 
     const qTasks = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
-    const unsubTasks = onSnapshot(qTasks, (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const unsubTasks = onSnapshot(qTasks, (s) => {
+      const data = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      setTasks(data);
+      if (onBadgeChange) onBadgeChange(data.filter(t => t.status === 0).length);
+    });
     const qCats = query(collection(db, "categories"), orderBy("name", "asc"));
     const unsubCats = onSnapshot(qCats, (s) => setCategories(s.docs.map(d => ({ id: d.id, ...d.data() }))));
     

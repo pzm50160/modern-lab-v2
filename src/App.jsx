@@ -142,7 +142,7 @@ function getTaskDiff(task, patch) {
           const m2 = newL.match(/^-\s*\[([xX ])\]\s*(.*?)(?:\s*\(@(.*?)\))?$/)
           if (m1 && m2 && m1[2] === m2[2]) {
             const isDone = m2[1].toLowerCase() === 'x'
-            return `${isDone ? '勾選了' : '取消勾選了'}「${m2[2]}」`
+            return `${isDone ? '已完成' : '取消完成'}「${m2[2]}」`
           }
         }
       }
@@ -227,6 +227,7 @@ function App() {
   const [specimenNotifEnabled, setSpecimenNotifEnabled] = useState(
     () => localStorage.getItem('specimen_notif_enabled') === 'true'
   )
+  const [specimenBadgeCount, setSpecimenBadgeCount] = useState(0)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
@@ -556,7 +557,7 @@ function App() {
 
     await updateTask(task, {
       checklist: nextChecklist,
-      history: appendHistory(task, `${target.done ? '取消勾選' : '勾選'}了 ${stripForNotification(target.text) || '項目'}`, name),
+      history: appendHistory(task, `${target.done ? '取消完成' : '已完成'}：${stripForNotification(target.text) || '項目'}`, name),
       updated_at: new Date().toISOString(),
     }, '更新勾選項目失敗')
 
@@ -573,6 +574,25 @@ function App() {
         await updateGeneralStatus(updatedTask, STATUS_DONE)
       }
     }
+  }
+
+  async function toggleSentOut(task, itemId) {
+    const name = profile?.display_name || displayNameFromSession(session)
+    const checklist = Array.isArray(task.checklist) ? task.checklist : []
+    const target = checklist.find(item => item.id === itemId)
+    if (!target) return
+    const now = target.sent_out_at ? null : new Date().toISOString()
+    const nextChecklist = checklist.map(item =>
+      item.id === itemId ? { ...item, sent_out_at: now } : item
+    )
+    const action = now
+      ? `外送：${stripForNotification(target.text) || '項目'}`
+      : `撤回外送：${stripForNotification(target.text) || '項目'}`
+    await updateTask(task, {
+      checklist: nextChecklist,
+      history: appendHistory(task, action, name),
+      updated_at: new Date().toISOString(),
+    }, '更新外送狀態失敗')
   }
 
   function checkAllItemsDone(task) {
@@ -713,6 +733,12 @@ function App() {
   const name = profile?.display_name || displayNameFromSession(session)
   const generalTasks = tasks.filter((task) => !isSpecimenTask(task))
   const specimenTasks = tasks.filter(isSpecimenTask)
+  const generalBadgeCount = generalTasks.filter(task =>
+    task.status === 0 &&
+    !(task.category_name === '備忘' && Array.isArray(task.archived_by) && task.archived_by.includes(name)) &&
+    !((task.category_name === '特殊項目' || task.category_name === '特殊檢驗') && Array.isArray(task.history) && task.history.some(h => h.action.includes('收集了檢體'))) &&
+    !(task.category_name === '特殊項目' && task.reported_done)
+  ).length
 
   return (
     <div className="app-shell">
@@ -775,13 +801,19 @@ function App() {
 
       <main className="workspace">
         <div className="module-switch" role="tablist" aria-label="工作模組">
-          <button className={module === 'general' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('general')}>
+          <button className={module === 'general' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('general')} style={{ position: 'relative' }}>
             <ClipboardList size={17} />
             工作交接
+            {generalBadgeCount > 0 && (
+              <span className="chat-unread-badge">{generalBadgeCount > 99 ? '99+' : generalBadgeCount}</span>
+            )}
           </button>
-          <button className={module === 'specimen' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('specimen')}>
+          <button className={module === 'specimen' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('specimen')} style={{ position: 'relative' }}>
             <Truck size={17} />
             檢體收送
+            {specimenBadgeCount > 0 && (
+              <span className="chat-unread-badge">{specimenBadgeCount > 99 ? '99+' : specimenBadgeCount}</span>
+            )}
           </button>
           <button className={module === 'chat' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('chat')} style={{ position: 'relative' }}>
             <MessageSquare size={17} />
@@ -793,15 +825,15 @@ function App() {
           <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => { setModule('recheck'); setRecheckSeenCount(recheckPendingCount) }} style={{ position: 'relative' }}>
             <FlaskConical size={17} />
             複驗
-            {(recheckPendingCount - recheckSeenCount) > 0 && module !== 'recheck' && (
-              <span className="chat-unread-badge">{(recheckPendingCount - recheckSeenCount) > 99 ? '99+' : (recheckPendingCount - recheckSeenCount)}</span>
+            {recheckPendingCount > 0 && (
+              <span className="chat-unread-badge">{recheckPendingCount > 99 ? '99+' : recheckPendingCount}</span>
             )}
           </button>
           <button className={module === 'c13' ? 'module-tab active' : 'module-tab'} onClick={() => { setModule('c13'); setC13SeenCount(c13PendingCount) }} style={{ position: 'relative' }}>
             <FlaskConical size={17} />
             碳13報告
-            {(c13PendingCount - c13SeenCount) > 0 && module !== 'c13' && (
-              <span className="chat-unread-badge">{(c13PendingCount - c13SeenCount) > 99 ? '99+' : (c13PendingCount - c13SeenCount)}</span>
+            {c13PendingCount > 0 && (
+              <span className="chat-unread-badge">{c13PendingCount > 99 ? '99+' : c13PendingCount}</span>
             )}
           </button>
         </div>
@@ -825,6 +857,7 @@ function App() {
             onDone={(task) => updateGeneralStatus(task, STATUS_DONE)}
             onRestore={(task) => updateGeneralStatus(task, 0)}
             onToggleChecklist={(task, itemId) => toggleChecklistItem(task, itemId)}
+            onToggleSentOut={(task, itemId) => toggleSentOut(task, itemId)}
             onVoid={voidGeneralTask}
             onDelete={deleteGeneralTask}
             onEdit={editGeneralTask}
@@ -836,7 +869,7 @@ function App() {
           <ChatBoard currentUser={name} session={session} onResetUnread={() => setUnreadChatCount(0)} />
         ) : module === 'specimen' ? (
           <Suspense fallback={<div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-2)' }}>載入中…</div>}>
-            <LegacySpecimen currentUser={name} isAdmin={isAdmin} />
+            <LegacySpecimen currentUser={name} isAdmin={isAdmin} onBadgeChange={setSpecimenBadgeCount} />
           </Suspense>
         ) : null}
 
@@ -900,6 +933,7 @@ function GeneralDashboard({
   onDone,
   onRestore,
   onToggleChecklist,
+  onToggleSentOut,
   onVoid,
   onDelete,
   onEdit,
@@ -1090,6 +1124,7 @@ function GeneralDashboard({
               onDone={() => onDone(task)}
               onRestore={() => onRestore(task)}
               onToggleChecklist={(itemId) => onToggleChecklist(task, itemId)}
+              onToggleSentOut={(itemId) => onToggleSentOut(task, itemId)}
               onVoid={() => onVoid(task)}
               onDelete={() => onDelete(task)}
               onEdit={(patch) => onEdit(task, patch)}
@@ -1316,13 +1351,14 @@ function TaskRow({
   currentUser, 
   onDone, 
   onRestore, 
-  onToggleChecklist, 
-  onVoid, 
-  onDelete, 
-  onEdit, 
+  onToggleChecklist,
+  onToggleSentOut,
+  onVoid,
+  onDelete,
+  onEdit,
   onOpenEditModal,
   onOpenImage,
-  handoffCategories 
+  handoffCategories
 }) {
   const isDone = task.status === STATUS_DONE
   const isVoided = task.status === STATUS_VOIDED
@@ -1376,7 +1412,17 @@ function TaskRow({
       setIsChecklistMode(true)
       const nextLines = lines.filter(l => l.trim()).map(text => {
         const isCheck = /^-\s*\[[xX ]\]\s*/.test(text)
-        const cleanText = text.replace(/^-\s*\[[xX ]\]\s*/, '').replace(/\s*\(@.*?\)\s*$/, '')
+        let cleanText = text.replace(/^-\s*\[[xX ]\]\s*/, '').replace(/\s*\(@.*?\)\s*$/, '')
+        
+        // 移除 HTML 標籤與轉義的 HTML 實體字元，避免在純文字編輯框中顯示 HTML 原始碼
+        cleanText = cleanText
+          .replace(/<[^>]+>/g, '')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .trim()
+
         return { text: cleanText, checked: isCheck }
       })
       setContentLines(nextLines.length > 0 ? nextLines : [{ text: '', checked: false }])
@@ -1748,41 +1794,96 @@ function TaskRow({
         ) : (
           <div className="post-content parsed-content">
             {localContent.split('\n').map((line, index) => {
-                const match = line.match(/^-\s*\[([xX ])\]\s*(.*?)(?:\s*\(@(.*?)\))?$/)
+                const match = line.match(/^-\s*\[([xX ])\]\s*(.*?)(?:\s*\(@([^)]*)\))?(?:\s*\[sent:([^|\]]+)(?:\|([^\]]*))?\])?(?:\s*\[report:([^|\]]+)(?:\|([^\]]*))?\])?$/)
                 if (match) {
-                  const [, char, rawText, owner] = match
+                  const [, char, rawText, owner, sentAt, sentBy, reportAt, reportBy] = match
                   const isChecked = char.toLowerCase() === 'x'
+                  const isSpecial = task.category_name === '特殊項目'
+                  const fmtTime = (iso) => { const d = new Date(iso); return `${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}` }
+                  const sentOutTime = sentAt ? fmtTime(sentAt) : null
+                  const reportTime = reportAt ? fmtTime(reportAt) : null
+                  const sentPart = sentAt ? ` [sent:${sentAt}${sentBy ? `|${sentBy}` : ''}]` : ''
+                  const reportPart = reportAt ? ` [report:${reportAt}${reportBy ? `|${reportBy}` : ''}]` : ''
                   return (
-                    <label key={index} className={isChecked ? 'task-check done' : 'task-check'} style={{ marginTop: '4px', marginBottom: '4px' }}>
-                      <input 
-                        type="checkbox" 
-                        checked={isChecked} 
-                        onChange={() => {
-                          if (isChecked) {
-                            if (owner && owner !== currentUser) {
-                              alert(`只有打勾的人 (${owner}) 可以取消勾選`)
-                              return
+                    <div key={index} style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', marginBottom: '4px' }}>
+                      <label className={isChecked ? 'task-check done' : 'task-check'} style={{ flex: 1, marginBottom: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => {
+                            if (isChecked) {
+                              if (owner && owner !== currentUser) {
+                                alert(`只有打勾的人 (${owner}) 可以取消勾選`)
+                                return
+                              }
+                              const lines = localContent.split('\n')
+                              lines[index] = `- [ ] ${rawText}${sentPart}${reportPart}`
+                              const newContent = lines.join('\n')
+                              setLocalContent(newContent)
+                              onEdit({ content: newContent })
+                            } else {
+                              const lines = localContent.split('\n')
+                              lines[index] = `- [x] ${rawText} (@${currentUser})${sentPart}${reportPart}`
+                              const newContent = lines.join('\n')
+                              setLocalContent(newContent)
+                              onEdit({ content: newContent })
                             }
+                          }}
+                          disabled={isHistorical}
+                        />
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                          {isChecked && <small style={{ fontWeight: 'bold', color: 'var(--green)', fontSize: '11px', whiteSpace: 'nowrap' }}>完成</small>}
+                          <span dangerouslySetInnerHTML={{ __html: migrateToHtml(rawText) }} />
+                          {owner && <small style={{ fontWeight: 'bold', color: '#fff', background: 'var(--blue)', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', whiteSpace: 'nowrap' }}>{owner}</small>}
+                        </span>
+                      </label>
+                      {isSpecial && !isHistorical && (
+                        sentOutTime ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                            已外送 {sentOutTime}{sentBy ? ` ${sentBy}` : ''}
+                            <button type="button" onClick={() => {
+                              const lines = localContent.split('\n')
+                              lines[index] = line.replace(/\s*\[sent:[^\]]*\]/, '')
+                              const newContent = lines.join('\n')
+                              setLocalContent(newContent)
+                              onEdit({ content: newContent, _log_only: `撤回外送：${stripForNotification(rawText) || '項目'}` })
+                            }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px', fontSize: '12px', lineHeight: 1 }} title="撤回外送">✕</button>
+                          </span>
+                        ) : (
+                          <button type="button" className="icon-text-button ghost" style={{ fontSize: '11px', padding: '2px 8px', whiteSpace: 'nowrap', flexShrink: 0 }} onClick={() => {
+                            const now = new Date().toISOString()
                             const lines = localContent.split('\n')
-                            lines[index] = `- [ ] ${rawText}`
+                            lines[index] = line + ` [sent:${now}|${currentUser}]`
                             const newContent = lines.join('\n')
                             setLocalContent(newContent)
-                            onEdit({ content: newContent })
-                          } else {
+                            onEdit({ content: newContent, _log_only: `外送：${stripForNotification(rawText) || '項目'}` })
+                          }}>外送</button>
+                        )
+                      )}
+                      {isSpecial && !isHistorical && (
+                        reportTime ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--purple, #7c3aed)', whiteSpace: 'nowrap' }}>
+                            報告已發出
+                            <button type="button" onClick={() => {
+                              const lines = localContent.split('\n')
+                              lines[index] = line.replace(/\s*\[report:[^\]]*\]/, '')
+                              const newContent = lines.join('\n')
+                              setLocalContent(newContent)
+                              onEdit({ content: newContent, _log_only: `撤回報告已發出：${stripForNotification(rawText) || '項目'}` })
+                            }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px', fontSize: '12px', lineHeight: 1 }} title="撤回">✕</button>
+                          </span>
+                        ) : (
+                          <button type="button" className="icon-text-button ghost" style={{ fontSize: '11px', padding: '2px 8px', whiteSpace: 'nowrap', flexShrink: 0 }} onClick={() => {
+                            const now = new Date().toISOString()
                             const lines = localContent.split('\n')
-                            lines[index] = `- [x] ${rawText} (@${currentUser})`
+                            lines[index] = line + ` [report:${now}|${currentUser}]`
                             const newContent = lines.join('\n')
                             setLocalContent(newContent)
-                            onEdit({ content: newContent })
-                          }
-                        }}
-                        disabled={isHistorical}
-                      />
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                        <span dangerouslySetInnerHTML={{ __html: migrateToHtml(rawText) }} />
-                        {owner && <small style={{ fontWeight: 'bold', color: '#fff', background: 'var(--blue)', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', whiteSpace: 'nowrap' }}>{owner}</small>}
-                      </span>
-                    </label>
+                            onEdit({ content: newContent, _log_only: `報告已發出：${stripForNotification(rawText) || '項目'}` })
+                          }}>報告已發出</button>
+                        )
+                      )}
+                    </div>
                   )
                 }
                 // Check if the line itself looks like HTML from WYSIWYG
@@ -1799,32 +1900,68 @@ function TaskRow({
             <div style={{ fontSize: '13px', fontWeight: 'bold', color: 'var(--text-muted)', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '4px' }}>
               📝 附加項目
             </div>
-            <div className="task-checklist" style={{ marginTop: 0, gap: '8px 20px' }}>
-              {localChecklist.map((item) => (
-                <label className={item.done ? 'task-check done' : 'task-check'} key={item.id}>
-                  <input
-                    type="checkbox"
-                    checked={Boolean(item.done)}
-                    onChange={() => {
-                      if (item.done) {
-                        if (!isAdmin && item.done_by && item.done_by !== currentUser) {
-                          alert(`只有勾選的人 (${item.done_by}) 可以取消勾選`)
-                          return
-                        }
-                        setLocalChecklist(prev => prev.map(i => i.id === item.id ? { ...i, done: false, done_by: null } : i))
-                      } else {
-                        setLocalChecklist(prev => prev.map(i => i.id === item.id ? { ...i, done: true, done_by: currentUser } : i))
-                      }
-                      onToggleChecklist(item.id)
-                    }}
-                    disabled={isHistorical}
-                  />
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                    {item.text}
-                    {item.done_by && <small style={{ fontWeight: 'bold', color: '#fff', background: 'var(--blue)', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', whiteSpace: 'nowrap' }}>{item.done_by}</small>}
-                  </span>
-                </label>
-              ))}
+            <div className="task-checklist" style={{ marginTop: 0, gap: '6px' }}>
+              {localChecklist.map((item) => {
+                const isSpecial = task.category_name === '特殊項目'
+                const sentOutTime = item.sent_out_at
+                  ? (() => { const d = new Date(item.sent_out_at); return `${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getDate().toString().padStart(2,'0')} ${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}` })()
+                  : null
+                return (
+                  <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <label className={item.done ? 'task-check done' : 'task-check'} style={{ flex: 1, marginBottom: 0 }}>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(item.done)}
+                        onChange={() => {
+                          if (item.done) {
+                            if (!isAdmin && item.done_by && item.done_by !== currentUser) {
+                              alert(`只有勾選的人 (${item.done_by}) 可以取消勾選`)
+                              return
+                            }
+                            setLocalChecklist(prev => prev.map(i => i.id === item.id ? { ...i, done: false, done_by: null } : i))
+                          } else {
+                            setLocalChecklist(prev => prev.map(i => i.id === item.id ? { ...i, done: true, done_by: currentUser } : i))
+                          }
+                          onToggleChecklist(item.id)
+                        }}
+                        disabled={isHistorical}
+                      />
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                        {item.done && <small style={{ fontWeight: 'bold', color: 'var(--green)', fontSize: '11px', whiteSpace: 'nowrap' }}>完成</small>}
+                        {item.text}
+                        {item.done_by && <small style={{ fontWeight: 'bold', color: '#fff', background: 'var(--blue)', padding: '2px 8px', borderRadius: '12px', fontSize: '11px', whiteSpace: 'nowrap' }}>{item.done_by}</small>}
+                      </span>
+                    </label>
+                    {isSpecial && !isHistorical && (
+                      sentOutTime ? (
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>
+                          已外送 {sentOutTime}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setLocalChecklist(prev => prev.map(i => i.id === item.id ? { ...i, sent_out_at: null } : i))
+                              onToggleSentOut(item.id)
+                            }}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px', fontSize: '12px', lineHeight: 1 }}
+                            title="撤回外送"
+                          >✕</button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="icon-text-button ghost"
+                          style={{ fontSize: '11px', padding: '2px 8px', whiteSpace: 'nowrap', flexShrink: 0 }}
+                          onClick={() => {
+                            const now = new Date().toISOString()
+                            setLocalChecklist(prev => prev.map(i => i.id === item.id ? { ...i, sent_out_at: now } : i))
+                            onToggleSentOut(item.id)
+                          }}
+                        >外送</button>
+                      )
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
@@ -1844,7 +1981,7 @@ function TaskRow({
               {history.map((item, index) => (
                 <div key={`${item.time}-${index}`} style={{ margin: '8px 0', lineHeight: '1.6', display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', gap: '6px', borderBottom: '1px solid #f1f5f9', paddingBottom: '6px' }}>
                   <span style={{ color: 'var(--blue)', fontWeight: '800' }}>{item.user || '系統'}</span>
-                  <span style={{ fontWeight: '500' }}>{item.action}</span>
+                  <span style={{ fontWeight: '500' }}>{(item.action || '').replace(/取消勾選了/g, '取消完成').replace(/勾選了/g, '已完成')}</span>
                   {item.details && (
                     <span style={{ color: '#92400e', background: '#fef3c7', padding: '2px 8px', borderRadius: '6px', border: '1px solid #fde68a', fontWeight: '600' }}>
                       {item.details}

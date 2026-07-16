@@ -175,7 +175,7 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
           .insert([{ ...body, creator_name: currentUser }]).select()
         if (error || !data?.[0]) { console.error('碳13新增失敗:', error); return false }
         const newId = data[0].id
-        setPending(prev => prev.map(r => r._k === row._k ? { ...r, _id: newId } : r))
+        setPending(prev => prev.map(r => r._k === row._k ? { ...r, _id: newId, creator_name: currentUser } : r))
       }
       return true
     } catch (e) {
