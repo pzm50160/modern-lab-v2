@@ -1794,7 +1794,9 @@ function TaskRow({
         ) : (
           <div className="post-content parsed-content">
             {localContent.split('\n').map((line, index) => {
-                const match = line.match(/^-\s*\[([xX ])\]\s*(.*?)(?:\s*\(@([^)]*)\))?(?:\s*\[sent:([^|\]]+)(?:\|([^\]]*))?\])?(?:\s*\[report:([^|\]]+)(?:\|([^\]]*))?\])?$/)
+                // 舊資料可能因「先按報告已發出、後按外送」導致標記順序相反，先換回 sent 在前、report 在後
+                const normalizedLine = line.replace(/(\s*\[report:[^\]]*\])(\s*\[sent:[^\]]*\])/, '$2$1')
+                const match = normalizedLine.match(/^-\s*\[([xX ])\]\s*(.*?)(?:\s*\(@([^)]*)\))?(?:\s*\[sent:([^|\]]+)(?:\|([^\]]*))?\])?(?:\s*\[report:([^|\]]+)(?:\|([^\]]*))?\])?$/)
                 if (match) {
                   const [, char, rawText, owner, sentAt, sentBy, reportAt, reportBy] = match
                   const isChecked = char.toLowerCase() === 'x'
@@ -1853,7 +1855,7 @@ function TaskRow({
                           <button type="button" className="icon-text-button ghost" style={{ fontSize: '11px', padding: '2px 8px', whiteSpace: 'nowrap', flexShrink: 0 }} onClick={() => {
                             const now = new Date().toISOString()
                             const lines = localContent.split('\n')
-                            lines[index] = line + ` [sent:${now}|${currentUser}]`
+                            lines[index] = `- [${char}] ${rawText}${owner ? ` (@${owner})` : ''} [sent:${now}|${currentUser}]${reportPart}`
                             const newContent = lines.join('\n')
                             setLocalContent(newContent)
                             onEdit({ content: newContent, _log_only: `外送：${stripForNotification(rawText) || '項目'}` })
@@ -1878,7 +1880,7 @@ function TaskRow({
                           <button type="button" className="icon-text-button ghost" style={{ fontSize: '11px', padding: '2px 8px', whiteSpace: 'nowrap', flexShrink: 0 }} onClick={() => {
                             const now = new Date().toISOString()
                             const lines = localContent.split('\n')
-                            lines[index] = line + ` [report:${now}|${currentUser}]`
+                            lines[index] = `- [${char}] ${rawText}${owner ? ` (@${owner})` : ''}${sentPart} [report:${now}|${currentUser}]`
                             const newContent = lines.join('\n')
                             setLocalContent(newContent)
                             onEdit({ content: newContent, _log_only: `報告已發出：${stripForNotification(rawText) || '項目'}` })
