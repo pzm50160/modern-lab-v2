@@ -85,7 +85,8 @@ const STATUS_DONE = 2
 const STATUS_VOIDED = 3
 
 function displayNameFromSession(session) {
-  return session?.user?.email?.split('@')[0] || '員工'
+  // email 前綴是 Base64 編碼過的帳號名，不能直接當顯示名稱；優先用建立帳號時寫入的中文名
+  return session?.user?.user_metadata?.display_name || session?.user?.email?.split('@')[0] || '員工'
 }
 
 function formatDateTime(value) {
@@ -350,7 +351,11 @@ function App() {
         .eq('id', uid)
         .maybeSingle()
 
-      if (error) console.error('Error fetching profile:', error)
+      if (error) {
+        // 查詢失敗（網路瞬斷、token 更新中）時保留上一次成功的 profile，避免名字與權限被清空
+        console.error('Error fetching profile:', error)
+        return
+      }
       setProfile(data)
 
       // 同步 FCM Token 到 Supabase 和 Firebase
