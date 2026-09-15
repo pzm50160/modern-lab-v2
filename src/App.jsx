@@ -741,6 +741,7 @@ function App() {
   const generalBadgeCount = generalTasks.filter(task =>
     task.status === 0 &&
     !(task.category_name === '備忘' && Array.isArray(task.archived_by) && task.archived_by.includes(name)) &&
+    !(task.category_name === '備忘' && Array.isArray(task.read_by) && task.read_by.includes(name)) &&
     !((task.category_name === '特殊項目' || task.category_name === '特殊檢驗') && Array.isArray(task.history) && task.history.some(h => h.action.includes('收集了檢體'))) &&
     !(task.category_name === '特殊項目' && task.reported_done)
   ).length
@@ -977,6 +978,7 @@ function GeneralDashboard({
       task.status === 0 &&
       activeCategoryIds.includes(task.category_name) &&
       !(task.category_name === '備忘' && Array.isArray(task.archived_by) && task.archived_by.includes(name)) &&
+      !(task.category_name === '備忘' && Array.isArray(task.read_by) && task.read_by.includes(name)) &&
       !((task.category_name === '特殊項目' || task.category_name === '特殊檢驗') && Array.isArray(task.history) && task.history.some(h => h.action.includes('收集了檢體'))) &&
       !(task.category_name === '特殊項目' && task.reported_done)
     ).length
