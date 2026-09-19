@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { supabase, supabaseAdmin } from '../lib/supabase'
+import { supabase } from '../lib/supabase'
 import {
   AlertTriangle,
   ArrowLeft,
