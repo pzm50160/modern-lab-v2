@@ -268,7 +268,7 @@ function App() {
     setCategories(data || [])
   }
 
-  // Realtime 訂閱：只依賴 session，避免 profile 載入或日期過濾變動時頻繁重建 channel
+  // Realtime 訂閱：只依賴使用者 id（session 物件每小時 token 更新都會換新，依賴它會每小時重建 channel）
   useEffect(() => {
     if (!session) return undefined
 
@@ -303,13 +303,13 @@ function App() {
       .subscribe()
 
     return () => supabase.removeChannel(channel)
-  }, [session])
+  }, [session?.user?.id])
 
   // 初始載入與日期過濾變動時重新撈任務
   useEffect(() => {
     if (!session) return
     fetchTasks()
-  }, [session, searchStartDate, searchEndDate])
+  }, [session?.user?.id, searchStartDate, searchEndDate])
 
   // 同步 moduleRef
   useEffect(() => { moduleRef.current = module }, [module])
@@ -514,11 +514,11 @@ function App() {
       const { error } = await supabase.auth.updateUser({ password: newPassword })
       if (error) throw error
 
-      const q = query(collection(db, 'users'), where('name', '==', name))
+      const q = query(collection(firebaseDb, 'users'), where('name', '==', name))
       const snap = await getDocs(q)
       if (!snap.empty) {
         const userDocId = snap.docs[0].id
-        await updateDoc(doc(db, 'users', userDocId), { password: newPassword })
+        await updateDoc(doc(firebaseDb, 'users', userDocId), { password: newPassword })
       }
       
       alert('密碼已成功在雙系統同步更新！')
