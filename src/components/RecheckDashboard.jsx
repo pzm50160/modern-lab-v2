@@ -6,6 +6,8 @@ const LABELS = ['送檢日期','送檢單位','廠商','檢驗編號','姓名','
 const KEYS   = ['date','sender','vendor','specimen_id','patient_name','test_item','initial_value','recheck_value','note']
 const WIDTHS = [110, 90, 90, 85, 75, 75, 72, 72, 130]
 const NC = KEYS.length
+// 選填欄位：其餘欄位在有資料的列中若空白，會標黃色提醒（不擋完成）
+const OPTIONAL = new Set(['note'])
 
 let _uid = 0
 function mkRow(db = {}) {
@@ -29,6 +31,9 @@ function mkRow(db = {}) {
 function hasData(row) {
   return KEYS.some(k => (row[k] || '').trim() !== '')
 }
+function isMissing(row, key) {
+  return !OPTIONAL.has(key) && (row[key] || '').trim() === ''
+}
 function fmtTime(s) {
   if (!s) return ''
   const d = new Date(s)
@@ -47,16 +52,25 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   const [pending, setPending] = useState([mkRow()])
   const [done, setDone]       = useState([])
   const [sel, setSel]         = useState([0, 0])
+  const [selEnd, setSelEnd]   = useState([0, 0])
   // 'dirty' | 'saving' | 'saved'
   const [rowStatus, setRowStatus] = useState({}) // { [_k]: status }
   const [loadState, setLoadState] = useState({ status: 'loading', msg: '', count: 0 })
 
+  const r0 = Math.min(sel[0], selEnd[0]), r1 = Math.max(sel[0], selEnd[0])
+  const c0 = Math.min(sel[1], selEnd[1]), c1 = Math.max(sel[1], selEnd[1])
   const pendRef  = useRef(pending)
   const timers   = useRef({})
   const cellRefs = useRef({})
+  const dragging = useRef(false)
 
   useEffect(() => { pendRef.current = pending }, [pending])
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    const up = () => { dragging.current = false }
+    window.addEventListener('mouseup', up)
+    return () => window.removeEventListener('mouseup', up)
+  }, [])
   useEffect(() => {
     if (onPendingCountChange) onPendingCountChange(pending.filter(hasData).length)
   }, [pending])
@@ -102,6 +116,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     const nr = Math.max(0, Math.min(r, rows.length - 1))
     const nc = Math.max(0, Math.min(c, NC - 1))
     setSel([nr, nc])
+    setSelEnd([nr, nc])
     setTimeout(() => {
       const el = cellRefs.current[`${nr}-${nc}`]
       if (el) { el.focus(); el.select() }
@@ -109,10 +124,30 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   }
 
   // ── 鍵盤 ─────────────────────────────────────────────────
+  // 擴大選取範圍（Shift+方向鍵 / 滑鼠拖曳），焦點留在起點格
+  function extendTo(r, c) {
+    const rows = tab === 'pending' ? pendRef.current : done
+    setSelEnd([Math.max(0, Math.min(r, rows.length - 1)), Math.max(0, Math.min(c, NC - 1))])
+  }
+  function selectCell(r, c) {
+    setSel([r, c])
+    setSelEnd([r, c])
+  }
+
   function onKeyDown(r, c, e) {
     const el = e.target
     const atS = el.selectionStart === 0
     const atE = el.selectionStart === el.value.length
+    if (e.shiftKey && e.key.startsWith('Arrow')) {
+      const multi = sel[0] !== selEnd[0] || sel[1] !== selEnd[1]
+      const [er, ec] = selEnd
+      if (e.key === 'ArrowUp')   { e.preventDefault(); extendTo(er - 1, ec) }
+      if (e.key === 'ArrowDown') { e.preventDefault(); extendTo(er + 1, ec) }
+      // 左右：格內文字游標在邊界（或已是多格範圍）才擴大範圍，否則維持格內選字
+      if (e.key === 'ArrowLeft'  && (multi || el.selectionStart === 0))              { e.preventDefault(); extendTo(er, ec - 1) }
+      if (e.key === 'ArrowRight' && (multi || el.selectionEnd === el.value.length)) { e.preventDefault(); extendTo(er, ec + 1) }
+      return
+    }
     if (e.key === 'ArrowUp')   { e.preventDefault(); moveTo(r - 1, c) }
     if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); moveTo(r + 1, c) }
     if (e.key === 'ArrowLeft'  && atS) { e.preventDefault(); moveTo(r, c - 1) }
@@ -126,18 +161,35 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   }
 
   // ── 貼上（Excel TSV） ─────────────────────────────────────
+  function onCopy(e) {
+    const multi = sel[0] !== selEnd[0] || sel[1] !== selEnd[1]
+    const el = e.target
+    // 單格且格內有選取部分文字：交給瀏覽器預設複製
+    if (!multi && el.tagName === 'INPUT' && el.selectionStart !== el.selectionEnd) return
+    const src = tab === 'pending' ? pendRef.current : done
+    const lines = []
+    for (let r = r0; r <= r1; r++) {
+      const row = src[r]
+      if (!row) continue
+      lines.push(KEYS.slice(c0, c1 + 1).map(k => (row[k] || '').replace(/[\t\r\n]+/g, ' ')).join('\t'))
+    }
+    e.preventDefault()
+    e.clipboardData.setData('text/plain', lines.join('\n'))
+  }
+
   function onPaste(e) {
     if (tab !== 'pending') return
     e.preventDefault()
     const text = (e.clipboardData || window.clipboardData).getData('text')
     const grid = text.replace(/\r/g, '').split('\n').filter(Boolean).map(l => l.split('\t'))
-    const [sr, sc] = sel
+    const sr = r0, sc = c0
 
     setPending(prev => {
       const next = [...prev]
       grid.forEach((cells, dr) => {
         const ri = sr + dr
         while (next.length <= ri + 1) next.push(mkRow())
+        if (!canEdit(next[ri])) return
         cells.forEach((val, dc) => {
           const ci = sc + dc
           if (ci < NC) next[ri] = { ...next[ri], [KEYS[ci]]: val.trim() }
@@ -281,6 +333,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   const rows         = tab === 'pending' ? pending : done
   const pendingCount = pending.filter(hasData).length
   const doneCount    = done.length
+  const incompleteCount = pending.filter(r => hasData(r) && KEYS.some(k => isMissing(r, k))).length
 
   const TH = { padding: '5px 8px', background: '#f1f5f9', fontWeight: '600', fontSize: '11.5px', color: '#64748b', borderRight: '1px solid #cbd5e1', borderBottom: '2px solid #94a3b8', whiteSpace: 'nowrap', textAlign: 'left', userSelect: 'none' }
   const tdBase = { padding: 0, borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }
@@ -309,7 +362,10 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         方向鍵 / Tab 移動　可從 Excel 直接貼上
         <span style={{ color: '#f59e0b' }}>●</span> 未儲存
         <span style={{ color: '#94a3b8' }}>↻</span> 儲存中
-        <span style={{ color: '#16a34a' }}>✓</span> 已儲存
+        <span style={{ color: '#16a34a' }}>✓</span> 已儲存<span style={{ marginLeft: 12 }}>Shift+方向鍵或拖曳可選多格，Ctrl+C 複製</span>
+        {incompleteCount > 0 && (
+          <span style={{ marginLeft: 12, color: '#a16207', background: '#fef9c3', padding: '1px 6px', borderRadius: 3 }}>{incompleteCount} 筆有空格未填（黃色）</span>
+        )}
         {loadState.status === 'error' && (
           <span style={{ marginLeft: 12, color: '#dc2626' }}>{loadState.msg}</span>
         )}
@@ -318,6 +374,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       <div
         style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', border: '1px solid #cbd5e1', borderRadius: '4px 4px 0 0', background: '#fff' }}
         onPaste={onPaste}
+        onCopy={onCopy}
       >
         <table style={{ borderCollapse: 'collapse', tableLayout: 'fixed', width: '100%', minWidth: WIDTHS.reduce((a, b) => a + b, 0) + 250 }}>
           <colgroup>
@@ -342,12 +399,14 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
               return (
               <tr key={row._k} style={{ background: tab === 'done' ? '#f8fafc' : '#fff' }}>
                 {KEYS.map((key, c) => {
-                  const isSel = tab === 'pending' && sel[0] === r && sel[1] === c
+                  const isSel = sel[0] === r && sel[1] === c
+                  const inRange = r >= r0 && r <= r1 && c >= c0 && c <= c1
                   const ro = tab === 'done' || !editable
+                  const missing = tab === 'pending' && hasData(row) && isMissing(row, key)
                   return (
-                    <td key={key} style={{
+                    <td key={key} onMouseEnter={() => { if (dragging.current) extendTo(r, c) }} style={{
                       ...tdBase,
-                      background: isSel ? '#dbeafe' : (!editable && row._id ? '#f8fafc' : 'inherit'),
+                      background: inRange ? '#dbeafe' : missing ? '#fef9c3' : (!editable && row._id ? '#f8fafc' : 'inherit'),
                       outline: isSel ? '2px solid #2563eb' : 'none',
                       outlineOffset: '-2px',
                     }}>
@@ -357,7 +416,13 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                         readOnly={ro}
                         title={!editable && row._id ? `僅 ${row.creator_name} 或管理員可修改` : ''}
                         onChange={e => !ro && onChange(r, c, e.target.value)}
-                        onFocus={() => setSel([r, c])}
+                        placeholder={missing ? '未填' : ''}
+                        onMouseDown={e => {
+                          if (e.shiftKey) { e.preventDefault(); extendTo(r, c); return }
+                          dragging.current = true
+                          selectCell(r, c)
+                        }}
+                        onFocus={() => { if (!dragging.current) selectCell(r, c) }}
                         onKeyDown={e => onKeyDown(r, c, e)}
                         onBlur={() => !ro && onCellBlur(r)}
                         style={{ ...INP, color: ro ? '#64748b' : '#111', cursor: ro ? 'not-allowed' : 'cell' }}
@@ -417,10 +482,10 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
 
       {/* Excel 式底部分頁 */}
       <div style={{ display: 'flex', alignItems: 'flex-end', borderTop: '2px solid #cbd5e1', background: '#f8fafc', flexShrink: 0 }}>
-        <button style={tabSt(tab === 'pending')} onClick={() => { setTab('pending'); setSel([0, 0]) }}>
+        <button style={tabSt(tab === 'pending')} onClick={() => { setTab('pending'); selectCell(0, 0) }}>
           待處理{pendingCount > 0 ? ` (${pendingCount})` : ''}
         </button>
-        <button style={tabSt(tab === 'done')} onClick={() => { setTab('done'); setSel([0, 0]) }}>
+        <button style={tabSt(tab === 'done')} onClick={() => { setTab('done'); selectCell(0, 0) }}>
           已處理{doneCount > 0 ? ` (${doneCount})` : ''}
         </button>
       </div>
