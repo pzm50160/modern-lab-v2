@@ -15,7 +15,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { db } from '../lib/firebase'
-import { collection, query, where, getDocs, addDoc, updateDoc, doc, deleteDoc } from 'firebase/firestore'
+import { collection, query, where, getDocs, addDoc, updateDoc, doc, deleteDoc, orderBy, limit } from 'firebase/firestore'
 
 export default function AdminPanel({ onClose, session }) {
   const [users, setUsers] = useState([])
@@ -33,6 +33,7 @@ export default function AdminPanel({ onClose, session }) {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [cleanupResult, setCleanupResult] = useState('')
   const [lastCleanup, setLastCleanup] = useState(null) // 各項最近一次清除紀錄 { [key]: row }，讀取失敗為 'error'
+  const [earliest, setEarliest] = useState(null)       // 各項目前最早一筆資料的時間 { [key]: { at } | { error } }
 
   function toggleTarget(key) {
     setCleanupTargets(prev => ({ ...prev, [key]: !prev[key] }))
@@ -66,15 +67,54 @@ export default function AdminPanel({ onClose, session }) {
     setLastCleanup(latest)
   }
 
-  function lastCleanupText(key) {
-    if (!lastCleanup) return ''
-    if (lastCleanup === 'error') return '（清除紀錄讀取失敗）'
+  // 各項目前最早一筆資料（每項只讀 1 筆；條件與清除時相同，檢體收送取最早建立的一筆）
+  async function fetchEarliest() {
+    async function first(table, col, filter) {
+      const { data, error } = await filter(supabase.from(table).select(col)).order(col, { ascending: true }).limit(1)
+      if (error) return { error: true }
+      return { at: data?.[0]?.[col] || null }
+    }
+    async function specimenFirst() {
+      const snap = await getDocs(query(collection(db, 'tasks'), orderBy('createdAt', 'asc'), limit(1)))
+      return { at: snap.docs[0]?.data().createdAt?.toMillis?.() || null }
+    }
+    const safe = p => p.catch(() => ({ error: true }))
+    const [handover, messages, recheck, c13, specimen] = await Promise.all([
+      // 清除時以 completed_at < 日期 篩選，沒有完成時間的不會被清，所以這裡也排除
+      safe(first('tasks', 'completed_at', q => q.in('status', [2, 3]).not('completed_at', 'is', null))),
+      safe(first('messages', 'created_at', q => q)),
+      safe(first('recheck_records', 'created_at', q => q.eq('completed', true))),
+      safe(first('c13_records', 'created_at', q => q.eq('completed', true))),
+      safe(specimenFirst()),
+    ])
+    setEarliest({ handover, messages, recheck, c13, specimen })
+  }
+
+  // 民國年 115/03/03
+  function roc(v) {
+    const d = v instanceof Date ? v : new Date(v)
+    if (isNaN(d.getTime())) return '?'
+    return `${d.getFullYear() - 1911}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  function rangeText(key) {
+    let range
+    if (!earliest) range = '查詢中…'
+    else {
+      const e = earliest[key]
+      if (!e || e.error) range = '無法查詢資料範圍'
+      else if (!e.at) range = '目前沒有資料'
+      else range = `目前資料 ${roc(e.at)} ～ ${roc(new Date())}`
+    }
+    if (!lastCleanup) return range
+    if (lastCleanup === 'error') return `${range}（清除紀錄讀取失敗）`
     const r = lastCleanup[key]
-    if (!r) return '尚無清除紀錄'
+    if (!r) return `${range}（尚無清除紀錄）`
     const [y, m, d] = r.cutoff_date.split('-').map(Number)
     const t = new Date(r.created_at)
-    const when = `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
-    return `上次清到 ${y}/${m}/${d}（含）以前 · ${when}${r.operator ? ' ' + r.operator : ''} 刪除 ${r.deleted_count} 筆`
+    const when = `${roc(t)} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
+    const cut = `${y - 1911}/${String(m).padStart(2, '0')}/${String(d).padStart(2, '0')}`
+    return `${range} ｜ 上次清到 ${cut}（含）以前，${when}${r.operator ? ' ' + r.operator : ''} 刪除 ${r.deleted_count} 筆`
   }
 
   async function openCleanupModal() {
@@ -141,6 +181,7 @@ export default function AdminPanel({ onClose, session }) {
       setTimeout(() => setCleanupResult(''), 10000)
     }
     fetchLastCleanup()
+    fetchEarliest()
     setShowPwdModal(false)
     setCleanupPwd('')
     setCleanupLoading(false)
@@ -167,6 +208,7 @@ export default function AdminPanel({ onClose, session }) {
     fetchUsers()
     fetchCategories()
     fetchLastCleanup()
+    fetchEarliest()
   }, [])
 
   async function toggleRole(userId, currentRole) {
@@ -516,7 +558,7 @@ export default function AdminPanel({ onClose, session }) {
                 <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={cleanupTargets[key]} onChange={() => { toggleTarget(key); setPreviewCounts(null) }} style={{ width: 16, height: 16, cursor: 'pointer' }} />
                   {label}
-                  <span style={{ fontSize: 13, color: '#64748b' }}>{lastCleanupText(key)}</span>
+                  <span style={{ fontSize: 13, color: '#64748b' }}>{rangeText(key)}</span>
                 </label>
               ))}
             </div>
