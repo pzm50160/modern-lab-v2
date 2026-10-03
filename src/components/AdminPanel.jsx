@@ -67,16 +67,24 @@ export default function AdminPanel({ onClose, session }) {
     setLastCleanup(latest)
   }
 
-  // 各項目前最早一筆資料（每項只讀 1 筆；條件與清除時相同，檢體收送取最早建立的一筆）
+  // 各項目前最早一筆資料（條件與清除時相同；Supabase 每項讀 1 筆，檢體收送讀最早建立的 20 筆）
   async function fetchEarliest() {
     async function first(table, col, filter) {
       const { data, error } = await filter(supabase.from(table).select(col)).order(col, { ascending: true }).limit(1)
       if (error) return { error: true }
       return { at: data?.[0]?.[col] || null }
     }
+    // 從最早建立的 20 筆中挑出已完成／已刪除（狀態 2、3，清除只刪這兩種），取其完成時間（無則建立時間）
     async function specimenFirst() {
-      const snap = await getDocs(query(collection(db, 'tasks'), orderBy('createdAt', 'asc'), limit(1)))
-      return { at: snap.docs[0]?.data().createdAt?.toMillis?.() || null }
+      const snap = await getDocs(query(collection(db, 'tasks'), orderBy('createdAt', 'asc'), limit(20)))
+      if (snap.empty) return { at: null }
+      const ts = snap.docs
+        .map(d => d.data())
+        .filter(t => t.status === 2 || t.status === 3)
+        .map(t => t.completedAt?.toMillis?.() || t.createdAt?.toMillis?.() || 0)
+        .filter(Boolean)
+      if (!ts.length) return { undetermined: true }
+      return { at: Math.min(...ts) }
     }
     const safe = p => p.catch(() => ({ error: true }))
     const [handover, messages, recheck, c13, specimen] = await Promise.all([
@@ -103,6 +111,7 @@ export default function AdminPanel({ onClose, session }) {
     else {
       const e = earliest[key]
       if (!e || e.error) range = '無法查詢資料範圍'
+      else if (e.undetermined) range = '無法判斷最早日期（最早 20 筆都尚未完成）'
       else if (!e.at) range = '目前沒有資料'
       else range = `目前資料 ${roc(e.at)} ～ ${roc(new Date())}`
     }
