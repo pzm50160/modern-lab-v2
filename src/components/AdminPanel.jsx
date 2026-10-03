@@ -32,6 +32,7 @@ export default function AdminPanel({ onClose, session }) {
   const [previewCounts, setPreviewCounts] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [cleanupResult, setCleanupResult] = useState('')
+  const [ranges, setRanges] = useState(null) // 各項目前可清除資料的筆數與日期範圍
 
   function toggleTarget(key) {
     setCleanupTargets(prev => ({ ...prev, [key]: !prev[key] }))
@@ -54,6 +55,43 @@ export default function AdminPanel({ onClose, session }) {
       const ts = d.data().completedAt?.toMillis() || d.data().createdAt?.toMillis() || 0
       return ts < cutoffMs
     })
+  }
+
+  // 查詢各項目前的資料範圍（條件與清除時相同）
+  async function fetchRanges() {
+    async function span(table, col, filter) {
+      const [a, b] = await Promise.all([
+        filter(supabase.from(table).select(col, { count: 'exact' })).order(col, { ascending: true }).limit(1),
+        filter(supabase.from(table).select(col)).order(col, { ascending: false, nullsFirst: false }).limit(1),
+      ])
+      if (a.error || b.error) return { error: true }
+      return { count: a.count ?? 0, min: a.data?.[0]?.[col], max: b.data?.[0]?.[col] }
+    }
+    async function specimenSpan() {
+      const docs = await fbSpecimenDocs(Infinity)
+      const ts = docs.map(d => d.data().completedAt?.toMillis() || d.data().createdAt?.toMillis() || 0).filter(Boolean)
+      return { count: docs.length, min: ts.length ? Math.min(...ts) : null, max: ts.length ? Math.max(...ts) : null }
+    }
+    const safe = p => p.catch(() => ({ error: true }))
+    const [handover, messages, recheck, c13, specimen] = await Promise.all([
+      // 清除時以 completed_at < 日期 篩選，沒有完成時間的不會被清，所以這裡也排除
+      safe(span('tasks', 'completed_at', q => q.in('status', [2, 3]).not('completed_at', 'is', null))),
+      safe(span('messages', 'created_at', q => q)),
+      safe(span('recheck_records', 'created_at', q => q.eq('completed', true))),
+      safe(span('c13_records', 'created_at', q => q.eq('completed', true))),
+      safe(specimenSpan()),
+    ])
+    setRanges({ handover, messages, recheck, c13, specimen })
+  }
+
+  function rangeText(key) {
+    if (!ranges) return '查詢中…'
+    const r = ranges[key]
+    if (!r || r.error) return '無法查詢'
+    if (!r.count) return '目前沒有資料'
+    const fmt = v => { const d = new Date(v); return isNaN(d.getTime()) ? '?' : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` }
+    const basis = key === 'handover' || key === 'specimen' ? '完成日期' : '建立日期'
+    return `目前 ${r.count} 筆：${fmt(r.min)} ～ ${fmt(r.max)}（依${basis}）`
   }
 
   async function openCleanupModal() {
@@ -105,6 +143,7 @@ export default function AdminPanel({ onClose, session }) {
       setCleanupResult(fmtCounts(counts, '共刪除'))
       setTimeout(() => setCleanupResult(''), 10000)
     }
+    fetchRanges()
     setShowPwdModal(false)
     setCleanupPwd('')
     setCleanupLoading(false)
@@ -130,6 +169,7 @@ export default function AdminPanel({ onClose, session }) {
   useEffect(() => {
     fetchUsers()
     fetchCategories()
+    fetchRanges()
   }, [])
 
   async function toggleRole(userId, currentRole) {
@@ -479,6 +519,7 @@ export default function AdminPanel({ onClose, session }) {
                 <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={cleanupTargets[key]} onChange={() => { toggleTarget(key); setPreviewCounts(null) }} style={{ width: 16, height: 16, cursor: 'pointer' }} />
                   {label}
+                  <span style={{ fontSize: 13, color: '#64748b' }}>{rangeText(key)}</span>
                 </label>
               ))}
             </div>
