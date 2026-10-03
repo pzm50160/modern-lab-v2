@@ -882,10 +882,10 @@ function App() {
         {/* RecheckDashboard / C13Dashboard 永遠保持掛載，只用 CSS 顯示/隱藏，避免切換模組時狀態消失 */}
         <Suspense fallback={null}>
           <div style={{ display: module === 'recheck' ? 'block' : 'none' }}>
-            <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} />
+            <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} active={module === 'recheck'} />
           </div>
           <div style={{ display: module === 'c13' ? 'block' : 'none' }}>
-            <C13Dashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setC13PendingCount} />
+            <C13Dashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setC13PendingCount} active={module === 'c13'} />
           </div>
         </Suspense>
       </main>
