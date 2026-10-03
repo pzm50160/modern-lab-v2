@@ -32,7 +32,7 @@ export default function AdminPanel({ onClose, session }) {
   const [previewCounts, setPreviewCounts] = useState(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [cleanupResult, setCleanupResult] = useState('')
-  const [ranges, setRanges] = useState(null) // 各項目前可清除資料的筆數與日期範圍
+  const [lastCleanup, setLastCleanup] = useState(null) // 各項最近一次清除紀錄 { [key]: row }，讀取失敗為 'error'
 
   function toggleTarget(key) {
     setCleanupTargets(prev => ({ ...prev, [key]: !prev[key] }))
@@ -57,41 +57,24 @@ export default function AdminPanel({ onClose, session }) {
     })
   }
 
-  // 查詢各項目前的資料範圍（條件與清除時相同）
-  async function fetchRanges() {
-    async function span(table, col, filter) {
-      const [a, b] = await Promise.all([
-        filter(supabase.from(table).select(col, { count: 'exact' })).order(col, { ascending: true }).limit(1),
-        filter(supabase.from(table).select(col)).order(col, { ascending: false, nullsFirst: false }).limit(1),
-      ])
-      if (a.error || b.error) return { error: true }
-      return { count: a.count ?? 0, min: a.data?.[0]?.[col], max: b.data?.[0]?.[col] }
-    }
-    async function specimenSpan() {
-      const docs = await fbSpecimenDocs(Infinity)
-      const ts = docs.map(d => d.data().completedAt?.toMillis() || d.data().createdAt?.toMillis() || 0).filter(Boolean)
-      return { count: docs.length, min: ts.length ? Math.min(...ts) : null, max: ts.length ? Math.max(...ts) : null }
-    }
-    const safe = p => p.catch(() => ({ error: true }))
-    const [handover, messages, recheck, c13, specimen] = await Promise.all([
-      // 清除時以 completed_at < 日期 篩選，沒有完成時間的不會被清，所以這裡也排除
-      safe(span('tasks', 'completed_at', q => q.in('status', [2, 3]).not('completed_at', 'is', null))),
-      safe(span('messages', 'created_at', q => q)),
-      safe(span('recheck_records', 'created_at', q => q.eq('completed', true))),
-      safe(span('c13_records', 'created_at', q => q.eq('completed', true))),
-      safe(specimenSpan()),
-    ])
-    setRanges({ handover, messages, recheck, c13, specimen })
+  // 讀取各項最近一次的清除紀錄（cleanup_logs）
+  async function fetchLastCleanup() {
+    const { data, error } = await supabase.from('cleanup_logs').select('*').order('created_at', { ascending: false }).limit(100)
+    if (error) { console.error('清除紀錄讀取失敗:', error); setLastCleanup('error'); return }
+    const latest = {}
+    ;(data || []).forEach(r => { if (!latest[r.target]) latest[r.target] = r })
+    setLastCleanup(latest)
   }
 
-  function rangeText(key) {
-    if (!ranges) return '查詢中…'
-    const r = ranges[key]
-    if (!r || r.error) return '無法查詢'
-    if (!r.count) return '目前沒有資料'
-    const fmt = v => { const d = new Date(v); return isNaN(d.getTime()) ? '?' : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}` }
-    const basis = key === 'handover' || key === 'specimen' ? '完成日期' : '建立日期'
-    return `目前 ${r.count} 筆：${fmt(r.min)} ～ ${fmt(r.max)}（依${basis}）`
+  function lastCleanupText(key) {
+    if (!lastCleanup) return ''
+    if (lastCleanup === 'error') return '（清除紀錄讀取失敗）'
+    const r = lastCleanup[key]
+    if (!r) return '尚無清除紀錄'
+    const [y, m, d] = r.cutoff_date.split('-').map(Number)
+    const t = new Date(r.created_at)
+    const when = `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`
+    return `上次清到 ${y}/${m}/${d}（含）以前 · ${when}${r.operator ? ' ' + r.operator : ''} 刪除 ${r.deleted_count} 筆`
   }
 
   async function openCleanupModal() {
@@ -136,6 +119,20 @@ export default function AdminPanel({ onClose, session }) {
       specimenDeleted = fbDocs.length
     }
     const errs = [rH, rM, rR, rC].map(r => r.error).filter(Boolean)
+    const results = { handover: rH, messages: rM, recheck: rR, c13: rC }
+    const operator = users.find(u => u.id === session?.user?.id)?.display_name || email
+    const logs = Object.keys(cleanupTargets)
+      .filter(key => cleanupTargets[key] && !results[key]?.error)
+      .map(key => ({
+        target: key,
+        cutoff_date: cleanupDate,
+        deleted_count: key === 'specimen' ? specimenDeleted : (results[key].data?.length || 0),
+        operator,
+      }))
+    if (logs.length) {
+      const { error: logErr } = await supabase.from('cleanup_logs').insert(logs)
+      if (logErr) console.error('清除紀錄寫入失敗:', logErr)
+    }
     if (errs.length > 0) {
       alert('部分清除失敗：\n' + errs.map(e => e.message).join('\n'))
     } else {
@@ -143,7 +140,7 @@ export default function AdminPanel({ onClose, session }) {
       setCleanupResult(fmtCounts(counts, '共刪除'))
       setTimeout(() => setCleanupResult(''), 10000)
     }
-    fetchRanges()
+    fetchLastCleanup()
     setShowPwdModal(false)
     setCleanupPwd('')
     setCleanupLoading(false)
@@ -169,7 +166,7 @@ export default function AdminPanel({ onClose, session }) {
   useEffect(() => {
     fetchUsers()
     fetchCategories()
-    fetchRanges()
+    fetchLastCleanup()
   }, [])
 
   async function toggleRole(userId, currentRole) {
@@ -519,7 +516,7 @@ export default function AdminPanel({ onClose, session }) {
                 <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14, cursor: 'pointer', userSelect: 'none' }}>
                   <input type="checkbox" checked={cleanupTargets[key]} onChange={() => { toggleTarget(key); setPreviewCounts(null) }} style={{ width: 16, height: 16, cursor: 'pointer' }} />
                   {label}
-                  <span style={{ fontSize: 13, color: '#64748b' }}>{rangeText(key)}</span>
+                  <span style={{ fontSize: 13, color: '#64748b' }}>{lastCleanupText(key)}</span>
                 </label>
               ))}
             </div>
