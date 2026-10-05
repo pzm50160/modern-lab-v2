@@ -40,6 +40,11 @@ function withBlankTail(list) {
   const tail = list[list.length - 1]
   return [...kept, tail && !tail._id && !hasData(tail) ? tail : mkRow()]
 }
+// 已處理：依建立時間排序，最新的在最上面
+function sortDone(list) {
+  const t = r => new Date(r.created_at || 0).getTime() || 0
+  return [...list].sort((a, b) => t(b) - t(a))
+}
 function fmtTime(s) {
   if (!s) return ''
   const d = new Date(s)
@@ -166,7 +171,7 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
       const initStatus = {}
       ;[...p, ...d].forEach(r => { initStatus[r._k] = 'saved' })
       setPending([...p, mkRow()])
-      setDone(d)
+      setDone(sortDone(d))
       setRowStatus(initStatus)
       loadedRef.current = true
       setLoadState({ status: 'ok', msg: `已載入 ${data.length} 筆`, count: data.length })
@@ -200,11 +205,11 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
     })
     setDone(prev => {
       const local = new Map(prev.map(r => [r._id, r]))
-      return data.filter(r => r.completed).map(db => {
+      return sortDone(data.filter(r => r.completed).map(db => {
         const row = mkRow(db, local.get(db.id)?._k)
         fresh[row._k] = 'saved'
         return row
-      })
+      }))
     })
     setRowStatus(prev => ({ ...prev, ...fresh }))
   }
@@ -244,8 +249,8 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
     setDone(prev => {
       const i = prev.findIndex(r => r._id === n.id)
       if (!n.completed) return i >= 0 ? prev.filter((_, j) => j !== i) : prev
-      if (i >= 0) { const next = [...prev]; next[i] = row; return next }
-      return [row, ...prev]
+      if (i >= 0) { const next = [...prev]; next[i] = row; return sortDone(next) }
+      return sortDone([row, ...prev])
     })
   }
   function removeRemote(id) {
@@ -481,7 +486,7 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
     setStatus(k, 'saved')
     if (db.completed) {
       setPending(prev => withBlankTail(prev.filter(r => r._k !== k)))
-      setDone(prev => [row, ...prev.filter(r => r._id !== db.id)])
+      setDone(prev => sortDone([row, ...prev.filter(r => r._id !== db.id)]))
     } else {
       setPending(prev => prev.map(r => r._k === k ? row : r))
     }
@@ -508,7 +513,7 @@ export default function C13Dashboard({ currentUser, isAdmin, onPendingCountChang
       const { data: upData, error: upErr } = await supabase.from(TABLE).update({ completed: true, done_at: now, updated_at: now }).eq('id', row._id).select('updated_at')
       if (upErr) { alert('標記完成失敗（更新）：' + upErr.message); return }
       const doneRow = { ...row, done_at: now, _updated_at: upData?.[0]?.updated_at || now }
-      setDone(prev => [doneRow, ...prev.filter(x => x._id !== row._id)])
+      setDone(prev => sortDone([doneRow, ...prev.filter(x => x._id !== row._id)]))
       setStatus(doneRow._k, 'saved')
       setPending(prev => withBlankTail(prev.filter(x => x._k !== row._k)))
     } catch (e) {
