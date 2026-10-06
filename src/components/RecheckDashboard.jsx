@@ -9,6 +9,8 @@ const WIDTHS = [110, 90, 90, 85, 75, 75, 72, 72, 130]
 const NC = KEYS.length
 // 選填欄位：其餘欄位皆為必填，未填完不能儲存
 const OPTIONAL = new Set(['note'])
+// 可事後再填：儲存時不檢查，按「完成」前必須填好；任何人都能補填（不限建立者）
+const FILL_LATER = new Set()
 // 同上：在空白列開始輸入時，自動帶入上一列的這些欄位
 const CARRY = ['date','sender','vendor']
 
@@ -33,6 +35,10 @@ function isMissing(row, key) {
 }
 function missingLabels(row) {
   return KEYS.filter(k => isMissing(row, k)).map(k => LABELS[KEYS.indexOf(k)])
+}
+// 儲存時檢查的必填（不含可事後再填的欄位）
+function saveMissingLabels(row) {
+  return KEYS.filter(k => isMissing(row, k) && !FILL_LATER.has(k)).map(k => LABELS[KEYS.indexOf(k)])
 }
 // 確保列表最後剛好有一列空白列（沿用原本的空白列，避免正在輸入的格子失去焦點）
 function withBlankTail(list) {
@@ -321,9 +327,15 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     setPending(prev => {
       const next = [...prev]
       for (let r = top + 1; r <= r1; r++) {
-        if (!next[r] || !canEdit(next[r])) continue
+        if (!next[r]) continue
         const row = { ...next[r] }
-        for (let c = c0; c <= c1; c++) row[KEYS[c]] = prev[top][KEYS[c]]
+        let changed = false
+        for (let c = c0; c <= c1; c++) {
+          if (!canEditCell(next[r], KEYS[c])) continue
+          row[KEYS[c]] = prev[top][KEYS[c]]
+          changed = true
+        }
+        if (!changed) continue
         next[r] = row
         setStatus(row._k, 'dirty')
       }
@@ -362,12 +374,12 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       grid.forEach((cells, dr) => {
         const ri = sr + dr
         while (next.length <= ri + 1) next.push(mkRow())
-        if (!canEdit(next[ri])) return
+        let changed = false
         cells.forEach((val, dc) => {
           const ci = sc + dc
-          if (ci < NC) next[ri] = { ...next[ri], [KEYS[ci]]: val.trim() }
+          if (ci < NC && canEditCell(next[ri], KEYS[ci])) { next[ri] = { ...next[ri], [KEYS[ci]]: val.trim() }; changed = true }
         })
-        setStatus(next[ri]._k, 'dirty')
+        if (changed) setStatus(next[ri]._k, 'dirty')
       })
       if (hasData(next[next.length - 1])) next.push(mkRow())
       return next
@@ -395,7 +407,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   async function saveRow(k) {
     const row = pendRef.current.find(x => x._k === k)
     if (!row || !hasData(row)) return false
-    const miss = missingLabels(row)
+    const miss = saveMissingLabels(row)
     if (miss.length) {
       setInvalid(prev => ({ ...prev, [k]: true }))
       return false
@@ -404,7 +416,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     setStatus(k, 'saving')
     const now = new Date().toISOString()
     const body = { updated_at: now }
-    KEYS.forEach(key => { body[key] = row[key] || '' })
+    KEYS.filter(key => canEditCell(row, key)).forEach(key => { body[key] = row[key] || '' })
     // 註：不寫入 completed，避免把別台設備剛標記完成的列退回待處理
     let serverTime = null
     try {
@@ -498,7 +510,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     let ok = 0, missing = 0
     for (const k of ks) {
       const row = pendRef.current.find(x => x._k === k)
-      if (row && missingLabels(row).length) { missing++; setInvalid(prev => ({ ...prev, [k]: true })); continue }
+      if (row && saveMissingLabels(row).length) { missing++; setInvalid(prev => ({ ...prev, [k]: true })); continue }
       if (await saveRow(k)) ok++
     }
     if (missing) alert(`已儲存 ${ok} 筆；有 ${missing} 筆必填欄位未填完（紅色格子），尚未儲存。`)
@@ -556,6 +568,10 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   function canEdit(row) {
     return !row._id || row.creator_name === currentUser || isAdmin
   }
+  // 單一欄位是否可編輯：可事後再填的欄位任何人都能改
+  function canEditCell(row, key) {
+    return canEdit(row) || FILL_LATER.has(key)
+  }
   // 是否有未儲存的修改
   function isDirtyRow(row) {
     const s = rowStatus[row._k] ?? statusRef.current[row._k]
@@ -606,6 +622,9 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         <span style={{ marginLeft: 10, background: '#fff7ed', border: '1px solid #fed7aa', padding: '0 6px', borderRadius: 3, color: '#9a3412' }}>淡橘底＝未儲存</span>
         <span style={{ marginLeft: 6, background: '#fef9c3', padding: '0 6px', borderRadius: 3, color: '#a16207' }}>黃底＝必填未填</span>
         <span style={{ marginLeft: 10 }}>{OPTIONAL.size ? '除「備註」外皆必填' : '全部欄位必填'}</span>
+        {FILL_LATER.size > 0 && (
+          <span style={{ marginLeft: 10 }}>{[...FILL_LATER].map(k => `「${LABELS[KEYS.indexOf(k)]}」`).join('')}可事後再填（按完成前要填好），任何人都能補填</span>
+        )}
         <span style={{ marginLeft: 10 }}>新的一列會自動帶入上一列的{CARRY.map(k => LABELS[KEYS.indexOf(k)]).join('／')}；Ctrl+D 同上（向下填滿）</span>
         <span style={{ marginLeft: 10 }}>Shift+方向鍵或拖曳可選多格，Ctrl+C 複製，可從 Excel 直接貼上</span>
         {dirtyCount > 0 && (
@@ -653,13 +672,14 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                 {KEYS.map((key, c) => {
                   const isSel = sel[0] === r && sel[1] === c
                   const inRange = r >= r0 && r <= r1 && c >= c0 && c <= c1
-                  const ro = tab === 'done' || !editable
+                  const cellEditable = canEditCell(row, key)
+                  const ro = tab === 'done' || !cellEditable
                   const missing = tab === 'pending' && filled && isMissing(row, key)
-                  const bad = missing && invalid[row._k]
+                  const bad = missing && invalid[row._k] && !FILL_LATER.has(key)
                   return (
                     <td key={key} onMouseEnter={() => { if (dragging.current) extendTo(r, c) }} style={{
                       ...tdBase,
-                      background: inRange ? '#dbeafe' : bad ? '#fecaca' : missing ? '#fef9c3' : (!editable && row._id ? '#f8fafc' : 'inherit'),
+                      background: inRange ? '#dbeafe' : bad ? '#fecaca' : missing ? '#fef9c3' : (!cellEditable && row._id ? '#f8fafc' : 'inherit'),
                       outline: isSel ? '2px solid #2563eb' : 'none',
                       outlineOffset: '-2px',
                     }}>
@@ -667,9 +687,9 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                         ref={el => { cellRefs.current[`${r}-${c}`] = el }}
                         value={row[key] || ''}
                         readOnly={ro}
-                        title={!editable && row._id ? `僅 ${row.creator_name} 或管理員可修改` : ''}
+                        title={!cellEditable && row._id ? `僅 ${row.creator_name} 或管理員可修改` : ''}
                         onChange={e => !ro && onChange(r, c, e.target.value)}
-                        placeholder={missing ? '必填' : ''}
+                        placeholder={missing ? (FILL_LATER.has(key) ? '待填' : '必填') : ''}
                         onMouseDown={e => {
                           if (e.shiftKey) { e.preventDefault(); extendTo(r, c); return }
                           dragging.current = true
@@ -704,7 +724,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                         const k = row._k
                         const ok = await saveRow(k)
                         const cur = pendRef.current.find(x => x._k === k)
-                        if (!ok && cur && missingLabels(cur).length) alert('以下必填欄位尚未填寫：\n' + missingLabels(cur).join('、'))
+                        if (!ok && cur && saveMissingLabels(cur).length) alert('以下必填欄位尚未填寫：\n' + saveMissingLabels(cur).join('、'))
                       }}
                       title="儲存這一列"
                       style={{ ...BTN, background: '#2563eb', color: '#fff', cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.6 : 1 }}
