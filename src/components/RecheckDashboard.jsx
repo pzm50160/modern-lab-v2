@@ -74,6 +74,9 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   const [rowStatus, setRowStatus] = useState({}) // { [_k]: status }
   const [invalid, setInvalid]     = useState({}) // { [_k]: true } 按儲存時缺必填的列
   const [loadState, setLoadState] = useState({ status: 'loading', msg: '', count: 0 })
+  const [search, setSearch]       = useState('')   // 已處理的搜尋字
+  const [restoredCount, setRestoredCount] = useState(0) // 從本機暫存恢復的未儲存筆數
+  const [draftReady, setDraftReady]       = useState(false) // 恢復完成後才開始更新暫存（避免恢復前先把暫存清掉）
 
   const r0 = Math.min(sel[0], selEnd[0]), r1 = Math.max(sel[0], selEnd[0])
   const c0 = Math.min(sel[1], selEnd[1]), c1 = Math.max(sel[1], selEnd[1])
@@ -85,6 +88,8 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   const cellRefs  = useRef({})
   const dragging  = useRef(false)
   const selKeys   = useRef({ a: null, e: null })
+  const shownDoneRef = useRef([]) // 已處理分頁目前顯示的列（套用搜尋後）
+  const restoredRef  = useRef(false)
   const remapSel  = useRef(false) // 僅在遠端同步造成列表變動時，才讓選取框跟著同一列走
   // 新增中的筆數；期間收到的即時 INSERT 先暫存，等新增完成再處理（避免自己新增的列重複出現）
   const inflight  = useRef(0)
@@ -94,6 +99,55 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   useEffect(() => { doneRef.current = done }, [done])
   useEffect(() => { statusRef.current = rowStatus }, [rowStatus])
   useEffect(() => { load() }, [])
+
+  // ── 未儲存資料暫存在本機瀏覽器 ─────────────────────────────
+  const draftKey = `draft_${TABLE}_${currentUser || ''}`
+  function readDraft() {
+    try { return JSON.parse(localStorage.getItem(draftKey) || '[]') } catch { return [] }
+  }
+  // 載入完成後恢復一次
+  useEffect(() => {
+    if (loadState.status !== 'ok' || !currentUser || restoredRef.current) return
+    restoredRef.current = true
+    const draft = readDraft()
+    setDraftReady(true)
+    if (!Array.isArray(draft) || !draft.length) return
+    const dirtyKs = []
+    setPending(prev => {
+      const next = [...prev]
+      draft.forEach(d => {
+        if (d._id) {
+          // 已存過的列：仍在待處理才恢復（已完成或已刪除就略過），保留當時的修改時間供衝突檢查
+          const i = next.findIndex(r => r._id === d._id)
+          if (i < 0) return
+          const row = { ...next[i], _updated_at: d._updated_at }
+          KEYS.forEach(k => { row[k] = d[k] || '' })
+          next[i] = row
+          dirtyKs.push(row._k)
+        } else {
+          const row = mkRow()
+          KEYS.forEach(k => { row[k] = d[k] || '' })
+          if (!hasData(row)) return
+          next.splice(next.length - 1, 0, row)
+          dirtyKs.push(row._k)
+        }
+      })
+      return next
+    })
+    setRowStatus(prev => { const n = { ...prev }; dirtyKs.forEach(k => { n[k] = 'dirty' }); return n })
+    setRestoredCount(draft.length)
+  }, [loadState.status, currentUser])
+  // 有變動就更新暫存；沒有未儲存的列就清掉
+  useEffect(() => {
+    if (!draftReady || !currentUser) return
+    const unsaved = pending
+      .filter(r => hasData(r) && (!r._id || rowStatus[r._k] === 'dirty' || rowStatus[r._k] === 'saving'))
+      .map(r => { const d = { _id: r._id, _updated_at: r._updated_at }; KEYS.forEach(k => { d[k] = r[k] }); return d })
+    try {
+      if (unsaved.length) localStorage.setItem(draftKey, JSON.stringify(unsaved))
+      else localStorage.removeItem(draftKey)
+    } catch { /* 無痕模式等無法使用本機儲存時略過 */ }
+  }, [pending, rowStatus, draftReady])
   useEffect(() => {
     if (onPendingCountChange) onPendingCountChange(pending.filter(hasData).length)
   }, [pending])
@@ -135,7 +189,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   useEffect(() => {
     if (!remapSel.current) return
     remapSel.current = false
-    const rows = tab === 'pending' ? pending : done
+    const rows = tab === 'pending' ? pending : shownDoneRef.current
     const { a, e } = selKeys.current
     const ia = rows.findIndex(x => x._k === a)
     const ie = rows.findIndex(x => x._k === e)
@@ -143,7 +197,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     if (ie >= 0 && ie !== selEnd[0]) setSelEnd([ie, selEnd[1]])
   }, [pending, done])
   useEffect(() => {
-    const rows = tab === 'pending' ? pendRef.current : doneRef.current
+    const rows = tab === 'pending' ? pendRef.current : shownDoneRef.current
     selKeys.current = { a: rows[sel[0]]?._k, e: rows[selEnd[0]]?._k }
   }, [sel, selEnd, tab])
 
@@ -270,7 +324,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
 
   // ── 聚焦 ─────────────────────────────────────────────────
   function moveTo(r, c) {
-    const rows = tab === 'pending' ? pendRef.current : done
+    const rows = tab === 'pending' ? pendRef.current : shownDoneRef.current
     const nr = Math.max(0, Math.min(r, rows.length - 1))
     const nc = Math.max(0, Math.min(c, NC - 1))
     setSel([nr, nc])
@@ -283,7 +337,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
 
   // 擴大選取範圍（Shift+方向鍵 / 滑鼠拖曳），焦點留在起點格
   function extendTo(r, c) {
-    const rows = tab === 'pending' ? pendRef.current : done
+    const rows = tab === 'pending' ? pendRef.current : shownDoneRef.current
     setSelEnd([Math.max(0, Math.min(r, rows.length - 1)), Math.max(0, Math.min(c, NC - 1))])
   }
   function selectCell(r, c) {
@@ -350,7 +404,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
     const el = e.target
     // 單格且格內有選取部分文字：交給瀏覽器預設複製
     if (!multi && el.tagName === 'INPUT' && el.selectionStart !== el.selectionEnd) return
-    const src = tab === 'pending' ? pendRef.current : done
+    const src = tab === 'pending' ? pendRef.current : shownDoneRef.current
     const lines = []
     for (let r = r0; r <= r1; r++) {
       const row = src[r]
@@ -450,8 +504,10 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       }
       // 以資料庫回傳的 updated_at 為準（資料庫若有自動更新時間也不會誤判衝突）
       setPending(prev => prev.map(r => r._k === k ? { ...r, _updated_at: serverTime || now } : r))
-      // 存檔途中又被修改過的話，維持未儲存
-      if (statusRef.current[k] === 'saving') setStatus(k, 'saved')
+      // 存檔途中又被修改過的話，維持未儲存（比對畫面上目前的內容與剛存進去的內容）
+      const cur = pendRef.current.find(x => x._k === k)
+      const unchanged = cur && KEYS.every(key => (cur[key] || '') === (row[key] || ''))
+      setStatus(k, unchanged ? 'saved' : 'dirty')
       return true
     } catch (e) {
       console.error('複驗存檔例外:', e)
@@ -517,13 +573,14 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   }
 
   // ── 標記完成（按鈕點擊）：需已儲存且必填填完 ─────────────
-  async function markDone(r) {
-    const row = pendRef.current[r]
+  async function markDone(k) {
+    const row = pendRef.current.find(x => x._k === k)
     if (!row || !row._id || isDirtyRow(row) || missingLabels(row).length) return
     try {
       const now = new Date().toISOString()
       const { data: upData, error: upErr } = await supabase.from(TABLE).update({ completed: true, done_at: now, updated_at: now }).eq('id', row._id).select('updated_at')
       if (upErr) { alert('標記完成失敗（更新）：' + upErr.message); return }
+      if (!upData?.length) { alert('標記完成失敗：資料庫沒有更新到這筆資料（可能已被刪除，或登入已失效）。\n請重新整理網頁後再試一次。'); return }
       const doneRow = { ...row, done_at: now, _updated_at: upData?.[0]?.updated_at || now }
       setDone(prev => sortDone([doneRow, ...prev.filter(x => x._id !== row._id)]))
       setStatus(doneRow._k, 'saved')
@@ -541,6 +598,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
       const now = new Date().toISOString()
       const { data: upData, error } = await supabase.from(TABLE).update({ completed: false, updated_at: now }).eq('id', row._id).select('updated_at')
       if (error) { alert('撤回失敗：' + error.message); return }
+      if (!upData?.length) { alert('撤回失敗：資料庫沒有更新到這筆資料（可能已被刪除，或登入已失效）。\n請重新整理網頁後再試一次。'); return }
       setDone(prev => prev.filter(r => r._k !== row._k))
       setPending(prev => {
         const rest = prev.filter(r => hasData(r) && r._id !== row._id)
@@ -579,7 +637,13 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   }
 
   // ── 渲染 ────────────────────────────────────────────────
-  const rows         = tab === 'pending' ? pending : done
+  // 已處理搜尋：空白分隔多個關鍵字，全部符合才顯示（比對各欄位與建立者）
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  const shownDone = terms.length
+    ? done.filter(r => { const text = [...KEYS.map(k => r[k]), r.creator_name].join(' ').toLowerCase(); return terms.every(t => text.includes(t)) })
+    : done
+  shownDoneRef.current = shownDone
+  const rows         = tab === 'pending' ? pending : shownDone
   const pendingCount = pending.filter(hasData).length
   const doneCount    = done.length
   const dirtyCount   = pending.filter(r => hasData(r) && isDirtyRow(r)).length
@@ -607,6 +671,18 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
           <p className="eyebrow">複驗追蹤</p>
           <h1>待處理 {pendingCount} 件</h1>
         </div>
+        {tab === 'done' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              value={search}
+              onChange={e => { setSearch(e.target.value); selectCell(0, 0) }}
+              placeholder="搜尋已處理（姓名、單位、報告…）"
+              style={{ padding: '8px 12px', fontSize: 14, border: '1px solid #cbd5e1', borderRadius: 6, width: 260 }}
+            />
+            {terms.length > 0 && <span style={{ fontSize: 13, color: '#64748b', whiteSpace: 'nowrap' }}>找到 {shownDone.length} 筆</span>}
+            {terms.length > 0 && <button type="button" onClick={() => setSearch('')} style={{ ...BTN, background: '#e2e8f0', color: '#475569', cursor: 'pointer' }}>清除</button>}
+          </div>
+        )}
         {tab === 'pending' && dirtyCount > 0 && (
           <button
             type="button"
@@ -629,6 +705,9 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         <span style={{ marginLeft: 10 }}>Shift+方向鍵或拖曳可選多格，Ctrl+C 複製，可從 Excel 直接貼上</span>
         {dirtyCount > 0 && (
           <span style={{ marginLeft: 12, color: '#9a3412', fontWeight: 700 }}>{dirtyCount} 筆未儲存</span>
+        )}
+        {restoredCount > 0 && dirtyCount > 0 && (
+          <span style={{ marginLeft: 12, color: '#9a3412' }}>（已恢復上次沒存的 {restoredCount} 筆，請確認後按儲存）</span>
         )}
         {incompleteCount > 0 && (
           <span style={{ marginLeft: 12, color: '#a16207', fontWeight: 700 }}>{incompleteCount} 筆有必填未填</span>
@@ -735,7 +814,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                       type="button"
                       disabled={missList.length > 0}
                       onMouseDown={e => e.preventDefault()}
-                      onClick={() => markDone(r)}
+                      onClick={() => markDone(row._k)}
                       title={missList.length ? `必填未填：${missList.join('、')}（補齊後按儲存才能完成）` : '標記完成，移至已處理'}
                       style={{ ...BTN, background: missList.length ? '#cbd5e1' : '#16a34a', color: '#fff', cursor: missList.length ? 'not-allowed' : 'pointer' }}
                     >完成</button>
