@@ -203,6 +203,15 @@ function App() {
     localStorage.setItem('recheckSeenCount', String(n))
   }
   const [c13PendingCount, setC13PendingCount] = useState(0)
+  // 複驗／碳13 尚未儲存的筆數（分頁標記與離開確認用）
+  const [recheckUnsaved, setRecheckUnsaved] = useState(0)
+  const [c13Unsaved, setC13Unsaved] = useState(0)
+  // 從有未儲存資料的分頁切走時先確認
+  function confirmLeave(target) {
+    const unsaved = module === 'recheck' ? recheckUnsaved : module === 'c13' ? c13Unsaved : 0
+    if (target === module || !unsaved) return true
+    return confirm(`這裡還有 ${unsaved} 筆沒儲存！\n\n沒按「儲存」的資料，別台設備看不到。\n\n按「確定」：先離開（資料會暫存在這台設備）\n按「取消」：留下來按儲存`)
+  }
   const [c13SeenCount, setC13SeenCountState] = useState(() => {
     const v = parseInt(localStorage.getItem('c13SeenCount') || '0', 10)
     return isNaN(v) ? 0 : v
@@ -807,37 +816,39 @@ function App() {
 
       <main className="workspace">
         <div className="module-switch" role="tablist" aria-label="工作模組">
-          <button className={module === 'general' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('general')} style={{ position: 'relative' }}>
+          <button className={module === 'general' ? 'module-tab active' : 'module-tab'} onClick={() => { if (!confirmLeave('general')) return; setModule('general') }} style={{ position: 'relative' }}>
             <ClipboardList size={17} />
             工作交接
             {generalBadgeCount > 0 && (
               <span className="chat-unread-badge">{generalBadgeCount > 99 ? '99+' : generalBadgeCount}</span>
             )}
           </button>
-          <button className={module === 'specimen' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('specimen')} style={{ position: 'relative' }}>
+          <button className={module === 'specimen' ? 'module-tab active' : 'module-tab'} onClick={() => { if (!confirmLeave('specimen')) return; setModule('specimen') }} style={{ position: 'relative' }}>
             <Truck size={17} />
             檢體收送
             {specimenBadgeCount > 0 && (
               <span className="chat-unread-badge">{specimenBadgeCount > 99 ? '99+' : specimenBadgeCount}</span>
             )}
           </button>
-          <button className={module === 'chat' ? 'module-tab active' : 'module-tab'} onClick={() => setModule('chat')} style={{ position: 'relative' }}>
+          <button className={module === 'chat' ? 'module-tab active' : 'module-tab'} onClick={() => { if (!confirmLeave('chat')) return; setModule('chat') }} style={{ position: 'relative' }}>
             <MessageSquare size={17} />
             留言板
             {unreadChatCount > 0 && module !== 'chat' && (
               <span className="chat-unread-badge">{unreadChatCount > 99 ? '99+' : unreadChatCount}</span>
             )}
           </button>
-          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => { setModule('recheck'); setRecheckSeenCount(recheckPendingCount) }} style={{ position: 'relative' }}>
+          <button className={module === 'recheck' ? 'module-tab active' : 'module-tab'} onClick={() => { if (!confirmLeave('recheck')) return; setModule('recheck'); setRecheckSeenCount(recheckPendingCount) }} style={{ position: 'relative' }}>
             <FlaskConical size={17} />
             複驗
+            {recheckUnsaved > 0 && <span style={{ marginLeft: 4, background: '#f97316', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 11, fontWeight: 700 }}>未存 {recheckUnsaved}</span>}
             {recheckPendingCount > 0 && (
               <span className="chat-unread-badge">{recheckPendingCount > 99 ? '99+' : recheckPendingCount}</span>
             )}
           </button>
-          <button className={module === 'c13' ? 'module-tab active' : 'module-tab'} onClick={() => { setModule('c13'); setC13SeenCount(c13PendingCount) }} style={{ position: 'relative' }}>
+          <button className={module === 'c13' ? 'module-tab active' : 'module-tab'} onClick={() => { if (!confirmLeave('c13')) return; setModule('c13'); setC13SeenCount(c13PendingCount) }} style={{ position: 'relative' }}>
             <FlaskConical size={17} />
             碳13報告
+            {c13Unsaved > 0 && <span style={{ marginLeft: 4, background: '#f97316', color: '#fff', borderRadius: 8, padding: '1px 6px', fontSize: 11, fontWeight: 700 }}>未存 {c13Unsaved}</span>}
             {c13PendingCount > 0 && (
               <span className="chat-unread-badge">{c13PendingCount > 99 ? '99+' : c13PendingCount}</span>
             )}
@@ -882,10 +893,10 @@ function App() {
         {/* RecheckDashboard / C13Dashboard 永遠保持掛載，只用 CSS 顯示/隱藏，避免切換模組時狀態消失 */}
         <Suspense fallback={null}>
           <div style={{ display: module === 'recheck' ? 'block' : 'none' }}>
-            <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} active={module === 'recheck'} />
+            <RecheckDashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setRecheckPendingCount} onUnsavedChange={setRecheckUnsaved} active={module === 'recheck'} />
           </div>
           <div style={{ display: module === 'c13' ? 'block' : 'none' }}>
-            <C13Dashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setC13PendingCount} active={module === 'c13'} />
+            <C13Dashboard currentUser={name} isAdmin={isAdmin} onPendingCountChange={setC13PendingCount} onUnsavedChange={setC13Unsaved} active={module === 'c13'} />
           </div>
         </Suspense>
       </main>

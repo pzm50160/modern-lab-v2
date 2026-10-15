@@ -64,7 +64,7 @@ function fmtTime(s) {
 
 
 // ── 主元件 ─────────────────────────────────────────────────
-export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountChange, active = true }) {
+export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountChange, onUnsavedChange, active = true }) {
   const [tab, setTab]         = useState('pending')
   const [pending, setPending] = useState([mkRow()])
   const [done, setDone]       = useState([])
@@ -648,6 +648,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
   const doneCount    = done.length
   const dirtyCount   = pending.filter(r => hasData(r) && isDirtyRow(r)).length
   const incompleteCount = pending.filter(r => hasData(r) && KEYS.some(k => isMissing(r, k))).length
+  useEffect(() => { if (onUnsavedChange) onUnsavedChange(dirtyCount) }, [dirtyCount])
 
   const TH = { padding: '5px 8px', background: '#f1f5f9', fontWeight: '600', fontSize: '11.5px', color: '#64748b', borderRight: '1px solid #cbd5e1', borderBottom: '2px solid #94a3b8', whiteSpace: 'nowrap', textAlign: 'left', userSelect: 'none' }
   const tdBase = { padding: 0, borderRight: '1px solid #e2e8f0', borderBottom: '1px solid #e2e8f0' }
@@ -683,15 +684,30 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
             {terms.length > 0 && <button type="button" onClick={() => setSearch('')} style={{ ...BTN, background: '#e2e8f0', color: '#475569', cursor: 'pointer' }}>清除</button>}
           </div>
         )}
-        {tab === 'pending' && dirtyCount > 0 && (
+      </section>
+
+      {/* 未儲存警示橫幅：有未儲存的列就顯示，存好自動消失 */}
+      <style>{`
+        @keyframes savePulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, .55) } 50% { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0) } }
+        .save-pulse { animation: savePulse 1.4s ease-in-out infinite }
+        @media (prefers-reduced-motion: reduce) { .save-pulse { animation: none } }
+      `}</style>
+      {dirtyCount > 0 && (
+        <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', background: '#fff7ed', border: '2px solid #f97316', borderRadius: 8, padding: '10px 14px', marginBottom: 8 }}>
+          <span style={{ fontSize: 16, fontWeight: 800, color: '#c2410c' }}>⚠ 還有 {dirtyCount} 筆沒儲存！</span>
+          <span style={{ fontSize: 13, color: '#9a3412', flex: '1 1 220px' }}>
+            沒按「儲存」的資料，<b>別台設備看不到</b>。
+            {restoredCount > 0 && '（已從這台設備恢復上次沒存的資料，請確認後儲存）'}
+          </span>
           <button
             type="button"
+            className="save-pulse"
             onMouseDown={e => e.preventDefault()}
             onClick={saveAll}
-            style={{ ...BTN, background: '#2563eb', color: '#fff', padding: '8px 16px', fontSize: 14, cursor: 'pointer' }}
+            style={{ ...BTN, background: '#2563eb', color: '#fff', padding: '8px 18px', fontSize: 15, cursor: 'pointer' }}
           >全部儲存（{dirtyCount}）</button>
-        )}
-      </section>
+        </div>
+      )}
 
       <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: 6, lineHeight: 1.9 }}>
         填完一列請按<b style={{ color: '#2563eb' }}>「儲存」</b>
@@ -703,12 +719,6 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
         )}
         <span style={{ marginLeft: 10 }}>新的一列會自動帶入上一列的{CARRY.map(k => LABELS[KEYS.indexOf(k)]).join('／')}；Ctrl+D 同上（向下填滿）</span>
         <span style={{ marginLeft: 10 }}>Shift+方向鍵或拖曳可選多格，Ctrl+C 複製，可從 Excel 直接貼上</span>
-        {dirtyCount > 0 && (
-          <span style={{ marginLeft: 12, color: '#9a3412', fontWeight: 700 }}>{dirtyCount} 筆未儲存</span>
-        )}
-        {restoredCount > 0 && dirtyCount > 0 && (
-          <span style={{ marginLeft: 12, color: '#9a3412' }}>（已恢復上次沒存的 {restoredCount} 筆，請確認後按儲存）</span>
-        )}
         {incompleteCount > 0 && (
           <span style={{ marginLeft: 12, color: '#a16207', fontWeight: 700 }}>{incompleteCount} 筆有必填未填</span>
         )}
@@ -806,6 +816,7 @@ export default function RecheckDashboard({ currentUser, isAdmin, onPendingCountC
                         if (!ok && cur && saveMissingLabels(cur).length) alert('以下必填欄位尚未填寫：\n' + saveMissingLabels(cur).join('、'))
                       }}
                       title="儲存這一列"
+                      className={saving ? '' : 'save-pulse'}
                       style={{ ...BTN, background: '#2563eb', color: '#fff', cursor: saving ? 'wait' : 'pointer', opacity: saving ? 0.6 : 1 }}
                     >{saving ? '儲存中' : '儲存'}</button>
                   )}
